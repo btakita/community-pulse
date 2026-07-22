@@ -1534,8 +1534,10 @@ export component AppWindow inherits Window {
 
                     mix-scroll := ScrollView {
                         vertical-stretch: 1;
+                        horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                        viewport-width: self.visible-width;
                         mix-content := VerticalLayout {
-                            width: mix-scroll.width - 10px;
+                            width: mix-scroll.visible-width - 10px;
                             spacing: 10px;
 
                             VerticalLayout {
@@ -1543,6 +1545,7 @@ export component AppWindow inherits Window {
                                 vertical-stretch: 0;
                                 spacing: 9px;
                                 for topic in root.topics: TopicChannel {
+                                    width: mix-content.width;
                                     data: topic;
                                     set-weight(weight) => { root.set-interest(topic.id, weight); }
                                 }
@@ -1554,18 +1557,22 @@ export component AppWindow inherits Window {
                                 vertical-stretch: 0;
                                 spacing: 6px;
                                 for topic in root.suggested-topics: Rectangle {
+                                    width: mix-content.width;
                                     height: 25px;
                                     border-radius: 12px;
                                     border-width: 1px;
                                     border-color: Tokens.line-strong;
                                     background: transparent;
                                     Text {
+                                        x: 9px;
+                                        width: parent.width - 18px;
                                         text: "+ " + topic.topic + (topic.from-research ? "  ·  ✦ " + topic.agent : "");
                                         color: Tokens.ink-2;
                                         font-family: "JetBrains Mono";
                                         font-size: 8.5px;
                                         horizontal-alignment: center;
                                         vertical-alignment: center;
+                                        overflow: elide;
                                     }
                                     TouchArea {
                                         clicked => {
@@ -1674,10 +1681,6 @@ export component AppWindow inherits Window {
                     moved => {
                         root.right-pane-width = min(620px, max(320px,
                             root.right-pane-width + self.pressed-x - self.mouse-x));
-                    }
-                    clicked => {
-                        root.right-pane-width = root.right-pane-width < 500px
-                            ? 530px : 420px;
                     }
                 }
             }

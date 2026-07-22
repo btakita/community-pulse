@@ -40,6 +40,11 @@ whole-message clipboard actions, and exact raw-markdown report copy.
 - [x] Desktop viewport behavior is implemented: an independently scrolling and
 collapsible Mix rail, constrained/elided digest content, and one persistent,
 resizable Agent/Research pane width.
+- [x] The expanded Mix viewport regression is fixed: topic channels and
+suggestion pills stay inside the rail, long research suggestions elide, and no
+horizontal scrollbar can obscure or displace rail controls.
+- [x] Right-pane resizing preserves the user's exact clamped drag result; the
+divider has no click-to-snap preset behavior.
 - [x] The deterministic Xvfb shot harness and demo-launcher CLI smoke target are
 implemented and are part of the documented verification path.
 - [ ] The dynamic z-score tooltip and source-provided post summaries below are
@@ -364,12 +369,19 @@ the card or column outside the viewport.
 - Agent and Research are two states of the same right pane, not two drawer
 sizes. They share one 420px default width, retain the current width on tab
 switch, and expose an 8px `ew-resize` divider clamped to 320–620px. Clicking the
-divider snaps between the default and 530px demo width; dragging permits
-continuous adjustment.
+divider does not alter pane width; dragging permits continuous adjustment and
+the released width remains exactly where the user left it.
 - The header, Mix rail, digest, and right pane remain inside the window at the
 minimum size. `09-minimum-viewport.png` is the deterministic acceptance image;
 `07-resizable-agent-pane.png` and `08-resizable-research-pane.png` must have the
 same divider x-coordinate.
+
+**Regression acceptance (2026-07-22): implemented.** The expanded Mix
+ScrollView owns exactly the visible rail width and disables horizontal
+scrolling. Every topic channel and suggestion pill is constrained to that
+viewport; long author/research-derived suggestion labels elide within their
+pill. Vertical scrolling remains independent and the attention-budget master
+remains pinned below it.
 
 ## Shared icon affordances (operator feedback)
 
