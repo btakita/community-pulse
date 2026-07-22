@@ -582,7 +582,18 @@ mod tests {
         assert!(prompt.contains("https://example.com/article"));
         assert!(prompt.contains("http://127.0.0.1:7432/mcp"));
         assert!(prompt.contains("structured `sections`"));
+        assert!(prompt.contains("Always produce a self-contained `web_report`"));
+        assert!(prompt.contains("series: { label, points, baseline? }"));
+        assert!(prompt.contains("research/reports/assets/"));
         assert!(!prompt.contains("{{"));
+    }
+
+    #[test]
+    fn topic_prompt_always_requires_a_rich_web_report() {
+        let prompt = render_prompt("rust", 7432);
+        assert!(prompt.contains("Always produce a self-contained web report"));
+        assert!(prompt.contains("series: { label, points, baseline? }"));
+        assert!(prompt.contains("research/reports/assets/"));
     }
 
     #[test]

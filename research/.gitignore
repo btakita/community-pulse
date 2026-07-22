@@ -1,2 +1,5 @@
 reports/*
 !reports/.gitkeep
+!reports/assets/
+reports/assets/*
+!reports/assets/.gitkeep

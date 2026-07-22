@@ -1,6 +1,9 @@
 use crate::chat::{AgentConfig, ChatEvent, ChatSession};
-use crate::domain::{ChatMessage, ChatRole, InterestModel, ResearchReport, ResearchRun};
-use crate::engine::PulseEngine;
+use crate::domain::{
+    ChartBucket, ChatMessage, ChatRole, InterestModel, ResearchReport, ResearchRun,
+    ResearchSectionSeries,
+};
+use crate::engine::{PulseEngine, methodology_copy, rank_breakdown_copy};
 use crate::live::{IngestController, LivePolicy, PublicFeed};
 use crate::mcp;
 use crate::reactive::UiSnapshot;
@@ -627,11 +630,19 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
         },
     );
     let research_annotations = card_research_annotations(&snapshot.research);
+    let selected_rank_breakdown = snapshot.evidence.as_ref().and_then(|evidence| {
+        snapshot
+            .digest
+            .iter()
+            .find(|card| card.id == evidence.id)
+            .map(rank_breakdown_copy)
+    });
     let digest = snapshot
         .digest
         .into_iter()
         .map(|card| {
             let chart = spark_geometry(&card.sparkline, None);
+            let chart_buckets = model(chart_bucket_rows(&card.chart_buckets, &chart, false));
             let research_count = research_counts
                 .get(card.id.as_str())
                 .copied()
@@ -660,6 +671,9 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
                     card.mentions_6h,
                     card.baseline_mean,
                     card.baseline_stddev,
+                    card.weighted_mentions_6h,
+                    card.weighted_baseline_mean,
+                    card.weighted_baseline_stddev,
                 )
                 .into(),
                 mentions: format!(
@@ -671,6 +685,7 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
                 spark_area: chart.area.into(),
                 spark_end_x: chart.end_x,
                 spark_end_y: chart.end_y,
+                chart_buckets,
                 research_count,
                 research_id: annotation
                     .map(|report| i32::try_from(report.id).unwrap_or(i32::MAX))
@@ -693,6 +708,12 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
         .collect();
     window.set_digest(model(digest));
     window.set_attention_budget(snapshot.budget as i32);
+    let methodology = methodology_copy(snapshot.budget, &snapshot.source_weights);
+    window.set_methodology_formula(methodology.formula.into());
+    window.set_methodology_ingest(methodology.ingest.into());
+    window.set_methodology_categorize(methodology.categorize.into());
+    window.set_methodology_score(methodology.score.into());
+    window.set_methodology_surface(methodology.surface.into());
 
     let topics = topic_rows(&snapshot.interests);
     let mixer_topics = topics
@@ -746,6 +767,7 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
 
     if let Some(evidence) = snapshot.evidence {
         let chart = spark_geometry(&evidence.sparkline, Some(evidence.baseline_mean));
+        let chart_buckets = model(chart_bucket_rows(&evidence.chart_buckets, &chart, true));
         let first_seen = evidence
             .posts
             .iter()
@@ -768,9 +790,18 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
                     source: post.source.clone().into(),
                     title: post.title.clone().into(),
                     url: post.url.clone().into(),
-                    detail: post.published_at.format("%H:%M UTC").to_string().into(),
+                    detail: format!(
+                        "{} · {}↑ on {} · top {}% for {}",
+                        post.published_at.format("%H:%M UTC"),
+                        post.points,
+                        post.source,
+                        top_percent(post.points_percentile),
+                        post.source
+                    )
+                    .into(),
                     summary: post.summary.clone().into(),
                     summary_tooltip: source_summary_tooltip(&post.source, &post.summary).into(),
+                    match_tooltip: topic_match_tooltip(&evidence.id, &post.matched_alias).into(),
                     claude_brief_id: article_brief_id(&snapshot.research, &post.url, "claude"),
                     codex_brief_id: article_brief_id(&snapshot.research, &post.url, "codex"),
                 })
@@ -784,12 +815,12 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
             baseline_value: format!("{:.1}", evidence.baseline_mean).into(),
             baseline: if evidence.baseline_stddev < 1.0 {
                 format!(
-                    "baseline μ {:.1} · σ {:.1} · z floors σ at 1.0",
+                    "raw-post baseline μ {:.1} · σ {:.1} · weighted z floors σ at 1.0",
                     evidence.baseline_mean, evidence.baseline_stddev
                 )
             } else {
                 format!(
-                    "baseline μ {:.1} · σ {:.1}",
+                    "raw-post baseline μ {:.1} · σ {:.1}",
                     evidence.baseline_mean, evidence.baseline_stddev
                 )
             }
@@ -800,8 +831,12 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
                 evidence.mentions_6h,
                 evidence.baseline_mean,
                 evidence.baseline_stddev,
+                evidence.weighted_mentions_6h,
+                evidence.weighted_baseline_mean,
+                evidence.weighted_baseline_stddev,
             )
             .into(),
+            mention_tooltip: MENTION_TOOLTIP.into(),
             first_seen: first_seen.into(),
             source_count: source_count.to_string().into(),
             spark_line: chart.line.into(),
@@ -809,6 +844,17 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
             spark_end_x: chart.end_x,
             spark_end_y: chart.end_y,
             baseline_y: chart.baseline_y,
+            chart_buckets,
+            rank_line: selected_rank_breakdown
+                .as_ref()
+                .map(|breakdown| breakdown.rank_line.as_str())
+                .unwrap_or_default()
+                .into(),
+            trend_line: selected_rank_breakdown
+                .as_ref()
+                .map(|breakdown| breakdown.trend_line.as_str())
+                .unwrap_or_default()
+                .into(),
         });
     } else {
         window.set_has_evidence(false);
@@ -1133,29 +1179,70 @@ fn research_section_rows(report: &ResearchReport) -> Vec<ResearchSectionRow> {
     report
         .sections
         .iter()
-        .map(|section| ResearchSectionRow {
-            kind: section.kind.clone().into(),
-            heading: match section.kind.as_str() {
-                "what" => "WHAT IT SAYS",
-                "substance" => "TECHNICAL SUBSTANCE",
-                "reaction" => "COMMUNITY REACTION",
-                "credibility" => "CREDIBILITY",
-                "watch" => "WHY IT MATTERS / WATCH",
-                _ => "SECTION",
+        .map(|section| {
+            let points = section
+                .series
+                .as_ref()
+                .map(|series| series.points.as_slice())
+                .unwrap_or_default();
+            let geometry = spark_geometry_values(
+                points,
+                section.series.as_ref().and_then(|series| series.baseline),
+            );
+            ResearchSectionRow {
+                kind: section.kind.clone().into(),
+                heading: match section.kind.as_str() {
+                    "what" => "WHAT IT SAYS",
+                    "substance" => "TECHNICAL SUBSTANCE",
+                    "reaction" => "COMMUNITY REACTION",
+                    "credibility" => "CREDIBILITY",
+                    "watch" => "WHY IT MATTERS / WATCH",
+                    _ => "SECTION",
+                }
+                .into(),
+                body: styled_markdown(&section.body),
+                quotes: model(
+                    section
+                        .quotes
+                        .iter()
+                        .map(|quote| ResearchQuoteRow {
+                            text: quote.text.clone().into(),
+                            url: quote.url.clone().into(),
+                            author: quote.author.clone().unwrap_or_default().into(),
+                        })
+                        .collect(),
+                ),
+                series_label: section
+                    .series
+                    .as_ref()
+                    .map(|series| series.label.as_str())
+                    .unwrap_or_default()
+                    .into(),
+                series_point_count: i32::try_from(points.len()).unwrap_or(i32::MAX),
+                series_line: geometry.line.clone().into(),
+                series_area: geometry.area.clone().into(),
+                series_end_x: geometry.end_x,
+                series_end_y: geometry.end_y,
+                series_baseline_y: geometry.baseline_y,
+                series_buckets: model(
+                    section
+                        .series
+                        .as_ref()
+                        .map(|series| series_chart_bucket_rows(series, &geometry))
+                        .unwrap_or_default(),
+                ),
+                images: model(
+                    section
+                        .images
+                        .iter()
+                        .map(|image| ResearchImageRow {
+                            source: slint::Image::load_from_path(Path::new(&image.path))
+                                .unwrap_or_default(),
+                            caption: image.caption.clone().into(),
+                        })
+                        .collect(),
+                ),
             }
-            .into(),
-            body: styled_markdown(&section.body),
-            quotes: model(
-                section
-                    .quotes
-                    .iter()
-                    .map(|quote| ResearchQuoteRow {
-                        text: quote.text.clone().into(),
-                        url: quote.url.clone().into(),
-                        author: quote.author.clone().unwrap_or_default().into(),
-                    })
-                    .collect(),
-            ),
         })
         .collect()
 }
@@ -1367,7 +1454,15 @@ fn styled_markdown(markdown: &str) -> slint::StyledText {
         .unwrap_or_else(|_| slint::StyledText::from_plain_text(&markdown))
 }
 
-fn z_tooltip(z: f64, mentions_6h: usize, baseline_mean: f64, baseline_stddev: f64) -> String {
+fn z_tooltip(
+    z: f64,
+    mentions_6h: usize,
+    baseline_mean: f64,
+    baseline_stddev: f64,
+    weighted_mentions_6h: f64,
+    weighted_baseline_mean: f64,
+    weighted_baseline_stddev: f64,
+) -> String {
     let band = if z >= 3.0 {
         format!("rare: {z:.1}σ above its own weekly norm")
     } else if z >= 2.0 {
@@ -1381,18 +1476,27 @@ fn z_tooltip(z: f64, mentions_6h: usize, baseline_mean: f64, baseline_stddev: f6
     };
     let mut lines = vec![
         format!(
-            "{mentions_6h} mentions this 6h vs typical {baseline_mean:.1} ± {baseline_stddev:.1}"
+            "raw activity: {mentions_6h} posts this 6h vs typical {baseline_mean:.1} ± {baseline_stddev:.1}"
+        ),
+        format!(
+            "z input: {weighted_mentions_6h:.2} weighted mentions vs typical {weighted_baseline_mean:.2} ± {weighted_baseline_stddev:.2}"
         ),
         band,
     ];
-    if baseline_stddev < 1.0 {
+    if weighted_baseline_stddev < 1.0 {
         lines.push("quiet topic: z uses a σ floor of 1.0".to_owned());
     }
-    if baseline_mean < 1.0 {
+    if weighted_baseline_mean < 1.0 {
         lines.push("small baseline — z can overstate; check mentions + sources".to_owned());
     }
     lines.push("z compares a topic to its own history, not to other topics".to_owned());
     lines.join("\n")
+}
+
+fn top_percent(percentile: f64) -> u32 {
+    ((1.0 - percentile.clamp(0.0, 1.0)) * 100.0)
+        .ceil()
+        .clamp(1.0, 100.0) as u32
 }
 
 fn source_summary_tooltip(source: &str, summary: &str) -> String {
@@ -1401,6 +1505,14 @@ fn source_summary_tooltip(source: &str, summary: &str) -> String {
     }
     let excerpt = summary.trim().chars().take(200).collect::<String>();
     format!("author's text · {source}\n{excerpt}")
+}
+
+fn topic_match_tooltip(topic: &str, matched_alias: &str) -> String {
+    if matched_alias.is_empty() {
+        String::new()
+    } else {
+        format!("in {topic}: matched '{matched_alias}'")
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1517,11 +1629,19 @@ fn research_copy_text(report: &ResearchReport) -> String {
 }
 
 fn apply_mobile_snapshot(window: &MobileWindow, snapshot: UiSnapshot) {
+    let selected_rank_breakdown = snapshot.evidence.as_ref().and_then(|evidence| {
+        snapshot
+            .digest
+            .iter()
+            .find(|card| card.id == evidence.id)
+            .map(rank_breakdown_copy)
+    });
     let digest = snapshot
         .digest
         .into_iter()
         .map(|card| {
             let chart = spark_geometry(&card.sparkline, None);
+            let chart_buckets = model(chart_bucket_rows(&card.chart_buckets, &chart, false));
             DigestRow {
                 id: card.id.into(),
                 topic: card.topic.into(),
@@ -1545,6 +1665,9 @@ fn apply_mobile_snapshot(window: &MobileWindow, snapshot: UiSnapshot) {
                     card.mentions_6h,
                     card.baseline_mean,
                     card.baseline_stddev,
+                    card.weighted_mentions_6h,
+                    card.weighted_baseline_mean,
+                    card.weighted_baseline_stddev,
                 )
                 .into(),
                 mentions: format!(
@@ -1556,6 +1679,7 @@ fn apply_mobile_snapshot(window: &MobileWindow, snapshot: UiSnapshot) {
                 spark_area: chart.area.into(),
                 spark_end_x: chart.end_x,
                 spark_end_y: chart.end_y,
+                chart_buckets,
                 research_count: 0,
                 research_id: -1,
                 research_agent: "".into(),
@@ -1566,7 +1690,6 @@ fn apply_mobile_snapshot(window: &MobileWindow, snapshot: UiSnapshot) {
         .collect();
     window.set_digest(model(digest));
     window.set_attention_budget(snapshot.budget as i32);
-
     let topics = topic_rows(&snapshot.interests);
     let mixer_topics = topics
         .iter()
@@ -1611,6 +1734,7 @@ fn apply_mobile_snapshot(window: &MobileWindow, snapshot: UiSnapshot) {
 
     if let Some(evidence) = snapshot.evidence {
         let chart = spark_geometry(&evidence.sparkline, Some(evidence.baseline_mean));
+        let chart_buckets = model(chart_bucket_rows(&evidence.chart_buckets, &chart, true));
         let first_seen = evidence
             .posts
             .iter()
@@ -1633,9 +1757,18 @@ fn apply_mobile_snapshot(window: &MobileWindow, snapshot: UiSnapshot) {
                     source: post.source.clone().into(),
                     title: post.title.clone().into(),
                     url: post.url.clone().into(),
-                    detail: post.published_at.format("%H:%M UTC").to_string().into(),
+                    detail: format!(
+                        "{} · {}↑ on {} · top {}% for {}",
+                        post.published_at.format("%H:%M UTC"),
+                        post.points,
+                        post.source,
+                        top_percent(post.points_percentile),
+                        post.source
+                    )
+                    .into(),
                     summary: post.summary.clone().into(),
                     summary_tooltip: source_summary_tooltip(&post.source, &post.summary).into(),
+                    match_tooltip: topic_match_tooltip(&evidence.id, &post.matched_alias).into(),
                     claude_brief_id: -1,
                     codex_brief_id: -1,
                 })
@@ -1649,12 +1782,12 @@ fn apply_mobile_snapshot(window: &MobileWindow, snapshot: UiSnapshot) {
             baseline_value: format!("{:.1}", evidence.baseline_mean).into(),
             baseline: if evidence.baseline_stddev < 1.0 {
                 format!(
-                    "baseline μ {:.1} · σ {:.1} · z floors σ at 1.0",
+                    "raw-post baseline μ {:.1} · σ {:.1} · weighted z floors σ at 1.0",
                     evidence.baseline_mean, evidence.baseline_stddev
                 )
             } else {
                 format!(
-                    "baseline μ {:.1} · σ {:.1}",
+                    "raw-post baseline μ {:.1} · σ {:.1}",
                     evidence.baseline_mean, evidence.baseline_stddev
                 )
             }
@@ -1665,8 +1798,12 @@ fn apply_mobile_snapshot(window: &MobileWindow, snapshot: UiSnapshot) {
                 evidence.mentions_6h,
                 evidence.baseline_mean,
                 evidence.baseline_stddev,
+                evidence.weighted_mentions_6h,
+                evidence.weighted_baseline_mean,
+                evidence.weighted_baseline_stddev,
             )
             .into(),
+            mention_tooltip: MENTION_TOOLTIP.into(),
             first_seen: first_seen.into(),
             source_count: source_count.to_string().into(),
             spark_line: chart.line.into(),
@@ -1674,6 +1811,17 @@ fn apply_mobile_snapshot(window: &MobileWindow, snapshot: UiSnapshot) {
             spark_end_x: chart.end_x,
             spark_end_y: chart.end_y,
             baseline_y: chart.baseline_y,
+            chart_buckets,
+            rank_line: selected_rank_breakdown
+                .as_ref()
+                .map(|breakdown| breakdown.rank_line.as_str())
+                .unwrap_or_default()
+                .into(),
+            trend_line: selected_rank_breakdown
+                .as_ref()
+                .map(|breakdown| breakdown.trend_line.as_str())
+                .unwrap_or_default()
+                .into(),
         });
     } else {
         window.set_has_evidence(false);
@@ -1701,9 +1849,60 @@ fn ingest_label(snapshot: &UiSnapshot) -> String {
         .unwrap_or_else(|| "ready".to_owned())
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InterestState {
+    Mute,
+    Neutral,
+    Boost,
+    Strong,
+}
+
+impl InterestState {
+    fn nearest(weight: f64) -> Self {
+        if weight < -0.5 {
+            Self::Mute
+        } else if weight < 0.5 {
+            Self::Neutral
+        } else if weight < 1.5 {
+            Self::Boost
+        } else {
+            Self::Strong
+        }
+    }
+
+    fn weight(self) -> f64 {
+        match self {
+            Self::Mute => -1.0,
+            Self::Neutral => 0.0,
+            Self::Boost => 1.0,
+            Self::Strong => 2.0,
+        }
+    }
+
+    fn glyph(self) -> &'static str {
+        match self {
+            Self::Mute => "−",
+            Self::Neutral => "0",
+            Self::Boost => "+",
+            Self::Strong => "++",
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Mute => "mute",
+            Self::Neutral => "neutral",
+            Self::Boost => "boost",
+            Self::Strong => "strong",
+        }
+    }
+}
+
 fn topic_rows(interests: &InterestModel) -> Vec<TopicRow> {
-    let mut topics = ["rust", "local-first", "ai-infra", "wasm-runtimes", "crypto"]
+    let preferred_order = ["rust", "local-first", "ai-infra", "wasm-runtimes", "crypto"];
+    let mut topics = preferred_order
         .into_iter()
+        .filter(|topic| interests.0.contains_key(*topic))
         .map(str::to_owned)
         .collect::<Vec<_>>();
     let extra_topics = interests
@@ -1717,26 +1916,24 @@ fn topic_rows(interests: &InterestModel) -> Vec<TopicRow> {
         .into_iter()
         .map(|topic| {
             let weight = interests.weight(&topic);
+            let state = InterestState::nearest(weight);
             TopicRow {
                 id: topic.clone().into(),
                 topic: display_topic(&topic).into(),
-                weight: if weight > 0.0 {
-                    format!("+{weight:.1}")
+                weight: state.glyph().into(),
+                weight_tooltip: if (weight - state.weight()).abs() > 0.001 {
+                    format!(
+                        "exact weight {weight:+.2} · tap a segment to snap to {}",
+                        state.glyph()
+                    )
                 } else {
-                    format!("{weight:.1}")
+                    String::new()
                 }
                 .into(),
-                state: if weight < 0.0 {
-                    "muted"
-                } else if weight > 0.0 {
-                    "boosted"
-                } else {
-                    "neutral"
-                }
-                .into(),
+                state: state.key().into(),
                 weight_value: weight as f32,
-                active: weight > 0.0,
-                muted: weight < 0.0,
+                active: matches!(state, InterestState::Boost | InterestState::Strong),
+                muted: state == InterestState::Mute,
             }
         })
         .collect()
@@ -1762,15 +1959,22 @@ struct SparkGeometry {
     end_x: f32,
     end_y: f32,
     baseline_y: f32,
+    point_xs: Vec<f32>,
+    point_ys: Vec<f32>,
 }
 
 fn spark_geometry(points: &[usize], baseline: Option<f64>) -> SparkGeometry {
+    let points = points.iter().map(|point| *point as f64).collect::<Vec<_>>();
+    spark_geometry_values(&points, baseline)
+}
+
+fn spark_geometry_values(points: &[f64], baseline: Option<f64>) -> SparkGeometry {
     const WIDTH: f64 = 116.0;
     const HEIGHT: f64 = 34.0;
     const PAD: f64 = 3.0;
 
-    let mut low = points.iter().copied().min().unwrap_or_default() as f64;
-    let mut high = points.iter().copied().max().unwrap_or(1) as f64;
+    let mut low = points.iter().copied().reduce(f64::min).unwrap_or_default();
+    let mut high = points.iter().copied().reduce(f64::max).unwrap_or(1.0);
     if let Some(baseline) = baseline {
         low = low.min(baseline);
         high = high.max(baseline);
@@ -1787,9 +1991,11 @@ fn spark_geometry(points: &[usize], baseline: Option<f64>) -> SparkGeometry {
     let mut line = String::new();
     let mut end_x = PAD;
     let mut end_y = HEIGHT - PAD;
+    let mut point_xs = Vec::with_capacity(points.len());
+    let mut point_ys = Vec::with_capacity(points.len());
     for (index, value) in points.iter().enumerate() {
         let x = PAD + step * index as f64;
-        let y = y_for(*value as f64);
+        let y = y_for(*value);
         let _ = write!(
             line,
             "{}{:0.2} {:0.2}",
@@ -1799,6 +2005,8 @@ fn spark_geometry(points: &[usize], baseline: Option<f64>) -> SparkGeometry {
         );
         end_x = x;
         end_y = y;
+        point_xs.push(x as f32);
+        point_ys.push(y as f32);
     }
     if line.is_empty() {
         line.push_str("M3 31 L113 31");
@@ -1811,8 +2019,130 @@ fn spark_geometry(points: &[usize], baseline: Option<f64>) -> SparkGeometry {
         end_x: end_x as f32,
         end_y: end_y as f32,
         baseline_y: baseline.map(y_for).unwrap_or(-1.0) as f32,
+        point_xs,
+        point_ys,
     }
 }
+
+fn series_chart_bucket_rows(
+    series: &ResearchSectionSeries,
+    geometry: &SparkGeometry,
+) -> Vec<ChartBucketRow> {
+    let point_count = series.points.len();
+    series
+        .points
+        .iter()
+        .zip(geometry.point_xs.iter().zip(&geometry.point_ys))
+        .enumerate()
+        .map(|(index, (value, (point_x, point_y)))| ChartBucketRow {
+            tooltip: format!(
+                "{}\npoint {} of {} · {}",
+                series.label,
+                index + 1,
+                point_count,
+                format_series_value(*value)
+            )
+            .into(),
+            url: "".into(),
+            point_x: *point_x,
+            point_y: *point_y,
+            start_label: if index == 0 { "1" } else { "" }.into(),
+            end_label: if index + 1 == point_count {
+                point_count.to_string()
+            } else {
+                String::new()
+            }
+            .into(),
+        })
+        .collect()
+}
+
+fn format_series_value(value: f64) -> String {
+    if value.fract().abs() < 0.001 {
+        format!("{value:.0}")
+    } else {
+        format!("{value:.2}")
+    }
+}
+
+fn chart_bucket_rows(
+    buckets: &[ChartBucket],
+    geometry: &SparkGeometry,
+    include_titles: bool,
+) -> Vec<ChartBucketRow> {
+    buckets
+        .iter()
+        .zip(geometry.point_xs.iter().zip(&geometry.point_ys))
+        .map(|(bucket, (point_x, point_y))| {
+            let start = bucket.start.with_timezone(&Local);
+            let end = bucket.end.with_timezone(&Local);
+            let noun = if bucket.mentions == 1 {
+                "mention"
+            } else {
+                "mentions"
+            };
+            let mut tooltip = format!(
+                "{}–{} local\n{} {noun}",
+                start.format("%H:%M"),
+                end.format("%H:%M"),
+                bucket.mentions
+            );
+            if bucket.source_counts.len() > 1 {
+                let breakdown = bucket
+                    .source_counts
+                    .iter()
+                    .map(|source| {
+                        format!("{} {}", source.count, source_short_label(&source.source))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                let _ = write!(tooltip, " — {breakdown}");
+            }
+            if include_titles {
+                for post in bucket.posts.iter().take(2) {
+                    let _ = write!(
+                        tooltip,
+                        "\n• {} · {}",
+                        source_short_label(&post.source),
+                        truncate_label(&post.title, 72)
+                    );
+                }
+            }
+            ChartBucketRow {
+                tooltip: tooltip.into(),
+                url: bucket
+                    .posts
+                    .first()
+                    .map(|post| post.url.as_str())
+                    .unwrap_or_default()
+                    .into(),
+                point_x: *point_x,
+                point_y: *point_y,
+                start_label: start.format("%H:%M").to_string().into(),
+                end_label: end.format("%H:%M").to_string().into(),
+            }
+        })
+        .collect()
+}
+
+fn source_short_label(source: &str) -> &str {
+    match source {
+        "Hacker News" => "HN",
+        "Product Hunt" => "PH",
+        other => other,
+    }
+}
+
+#[cfg(test)]
+fn bucket_index_from_mouse_x(mouse_x: f32, width: f32, bucket_count: usize) -> Option<usize> {
+    if bucket_count == 0 || !mouse_x.is_finite() || !width.is_finite() || width <= 0.0 {
+        return None;
+    }
+    let index = ((mouse_x / width) * bucket_count as f32 - 0.5).round() as isize;
+    Some(index.clamp(0, bucket_count as isize - 1) as usize)
+}
+
+const MENTION_TOOLTIP: &str = "a mention = one post categorized into this topic in the window; comments and votes are engagement, not mentions";
 
 fn compact_result(value: &serde_json::Value) -> String {
     if let Some(error) = value.get("error").and_then(serde_json::Value::as_str) {
@@ -1837,17 +2167,92 @@ fn model<T: Clone + 'static>(values: Vec<T>) -> ModelRc<T> {
 #[cfg(test)]
 mod tests {
     use super::{
-        OpenTarget, ReportBlock, article_brief_id, card_research_annotations, chat_artifact_link,
-        compact_result, evidence_research_rows, markdown_lite, newest_unseen_report,
-        parse_report_blocks, research_copy_text, research_run_label, research_run_progress,
-        resolve_open_target, source_summary_tooltip, suggested_topic_rows,
+        InterestState, MENTION_TOOLTIP, OpenTarget, ReportBlock, article_brief_id,
+        bucket_index_from_mouse_x, card_research_annotations, chart_bucket_rows,
+        chat_artifact_link, compact_result, evidence_research_rows, markdown_lite,
+        newest_unseen_report, parse_report_blocks, research_copy_text, research_run_label,
+        research_run_progress, research_section_rows, resolve_open_target, source_summary_tooltip,
+        spark_geometry, suggested_topic_rows, topic_match_tooltip, topic_rows,
         uses_structured_sections, z_tooltip,
     };
-    use crate::domain::{ResearchReport, ResearchRun, ResearchSection};
+    use crate::domain::{
+        ChartBucket, ChartPost, InterestModel, ResearchReport, ResearchRun, ResearchSection,
+        ResearchSectionSeries, SourceMentionCount,
+    };
     use chrono::{Duration, Utc};
     use serde_json::json;
-    use std::collections::HashSet;
+    use std::collections::{BTreeMap, HashSet};
     use std::fs;
+
+    #[test]
+    fn chart_bucket_index_clamps_both_edges() {
+        assert_eq!(bucket_index_from_mouse_x(0.0, 120.0, 12), Some(0));
+        assert_eq!(bucket_index_from_mouse_x(-5.0, 120.0, 12), Some(0));
+        assert_eq!(bucket_index_from_mouse_x(120.0, 120.0, 12), Some(11));
+        assert_eq!(bucket_index_from_mouse_x(150.0, 120.0, 12), Some(11));
+        assert_eq!(bucket_index_from_mouse_x(60.0, 120.0, 12), Some(6));
+        assert_eq!(bucket_index_from_mouse_x(0.0, 0.0, 12), None);
+        assert_eq!(bucket_index_from_mouse_x(0.0, 120.0, 0), None);
+    }
+
+    #[test]
+    fn evidence_chart_bucket_copy_includes_raw_mentions_and_titles() {
+        let start = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let buckets = vec![ChartBucket {
+            start,
+            end: start + Duration::hours(1),
+            mentions: 8,
+            source_counts: vec![
+                SourceMentionCount {
+                    source: "Hacker News".to_owned(),
+                    count: 6,
+                },
+                SourceMentionCount {
+                    source: "Lobsters".to_owned(),
+                    count: 2,
+                },
+            ],
+            posts: vec![ChartPost {
+                source: "Hacker News".to_owned(),
+                title: "A concrete post".to_owned(),
+                url: "https://example.com/post".to_owned(),
+            }],
+        }];
+        let geometry = spark_geometry(&[8], None);
+        let rows = chart_bucket_rows(&buckets, &geometry, true);
+
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].tooltip.contains("8 mentions — 6 HN · 2 Lobsters"));
+        assert!(rows[0].tooltip.contains("HN · A concrete post"));
+        assert_eq!(rows[0].url.as_str(), "https://example.com/post");
+    }
+
+    #[test]
+    fn single_source_bucket_omits_the_redundant_breakdown() {
+        let start = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let buckets = vec![ChartBucket {
+            start,
+            end: start + Duration::hours(1),
+            mentions: 2,
+            source_counts: vec![SourceMentionCount {
+                source: "Hacker News".to_owned(),
+                count: 2,
+            }],
+            posts: Vec::new(),
+        }];
+        let rows = chart_bucket_rows(&buckets, &spark_geometry(&[2], None), true);
+
+        assert!(rows[0].tooltip.contains("2 mentions"));
+        assert!(!rows[0].tooltip.contains("mentions —"));
+    }
+
+    #[test]
+    fn mention_tooltip_defines_a_mention_without_engagement() {
+        assert_eq!(
+            MENTION_TOOLTIP,
+            "a mention = one post categorized into this topic in the window; comments and votes are engagement, not mentions"
+        );
+    }
 
     fn report(
         id: i64,
@@ -1922,6 +2327,31 @@ mod tests {
     }
 
     #[test]
+    fn rich_section_series_renders_every_native_chart_point() {
+        let mut report = report(1, "rust", "claude", "organic", "Diverse", &[], 1);
+        report.sections = vec![ResearchSection {
+            kind: "substance".to_owned(),
+            body: "A measured trend.".to_owned(),
+            quotes: vec![],
+            series: Some(ResearchSectionSeries {
+                label: "mentions".to_owned(),
+                points: vec![2.0, 4.5, 8.0],
+                baseline: Some(3.0),
+            }),
+            images: vec![],
+        }];
+
+        let rows = research_section_rows(&report);
+        assert_eq!(rows[0].series_point_count, 3);
+        assert!(rows[0].series_line.starts_with('M'));
+        assert!(rows[0].series_baseline_y >= 0.0);
+
+        let ui = include_str!("../ui/app.slint");
+        assert!(ui.contains("text: \"Open full brief ↗\""));
+        assert!(ui.contains("root.open-url(root.web-report)"));
+    }
+
+    #[test]
     fn z_tooltip_selects_every_interpretation_band() {
         let cases = [
             (3.0, "rare:"),
@@ -1932,23 +2362,24 @@ mod tests {
             (-1.0, "cooling:"),
         ];
         for (z, expected) in cases {
-            assert!(z_tooltip(z, 12, 4.0, 2.0).contains(expected));
+            assert!(z_tooltip(z, 12, 4.0, 2.0, 12.0, 4.0, 2.0).contains(expected));
         }
     }
 
     #[test]
     fn z_tooltip_includes_only_applicable_caveats() {
-        let typical = z_tooltip(1.5, 12, 4.0, 2.0);
-        assert!(typical.starts_with("12 mentions this 6h vs typical 4.0 ± 2.0"));
+        let typical = z_tooltip(1.5, 12, 4.0, 2.0, 12.0, 4.0, 2.0);
+        assert!(typical.starts_with("raw activity: 12 posts this 6h vs typical 4.0 ± 2.0"));
+        assert!(typical.contains("z input: 12.00 weighted mentions"));
         assert!(!typical.contains("σ floor"));
         assert!(!typical.contains("small baseline"));
         assert!(typical.ends_with("z compares a topic to its own history, not to other topics"));
 
-        let quiet = z_tooltip(1.5, 12, 4.0, 0.5);
+        let quiet = z_tooltip(1.5, 12, 4.0, 2.0, 12.0, 4.0, 0.5);
         assert!(quiet.contains("quiet topic: z uses a σ floor of 1.0"));
         assert!(!quiet.contains("small baseline"));
 
-        let small = z_tooltip(1.5, 12, 0.5, 2.0);
+        let small = z_tooltip(1.5, 12, 4.0, 2.0, 12.0, 0.5, 2.0);
         assert!(!small.contains("σ floor"));
         assert!(small.contains("small baseline — z can overstate; check mentions + sources"));
     }
@@ -1965,6 +2396,15 @@ mod tests {
         let tooltip = source_summary_tooltip("Product Hunt", &long);
         let excerpt = tooltip.split_once('\n').unwrap().1;
         assert_eq!(excerpt.chars().count(), 200);
+    }
+
+    #[test]
+    fn topic_match_tooltip_names_the_recorded_alias_without_fabrication() {
+        assert_eq!(topic_match_tooltip("wasm-runtimes", ""), "");
+        assert_eq!(
+            topic_match_tooltip("wasm-runtimes", "wasmtime"),
+            "in wasm-runtimes: matched 'wasmtime'"
+        );
     }
 
     #[test]
@@ -2082,6 +2522,71 @@ mod tests {
     }
 
     #[test]
+    fn removed_topic_leaves_the_mix_and_can_resurface_as_suggested() {
+        let mut interests = InterestModel(BTreeMap::from([
+            ("rust".to_owned(), 0.0),
+            ("crypto".to_owned(), -1.0),
+        ]));
+        assert_eq!(
+            topic_rows(&interests)
+                .iter()
+                .map(|row| row.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["rust", "crypto"]
+        );
+
+        interests.set("rust", 0.0);
+        let rows = topic_rows(&interests);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id.as_str(), "crypto");
+        assert!(rows[0].muted);
+
+        let mixer_topics = rows
+            .iter()
+            .map(|row| row.id.to_string())
+            .collect::<HashSet<_>>();
+        let suggestions = suggested_topic_rows(
+            &["rust".to_owned(), "crypto".to_owned()],
+            &mixer_topics,
+            &[],
+        );
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].topic.as_str(), "rust");
+    }
+
+    #[test]
+    fn interest_states_round_trip_and_fractional_values_snap_on_first_tap() {
+        for (state, weight, glyph) in [
+            (InterestState::Mute, -1.0, "−"),
+            (InterestState::Neutral, 0.0, "0"),
+            (InterestState::Boost, 1.0, "+"),
+            (InterestState::Strong, 2.0, "++"),
+        ] {
+            assert_eq!(InterestState::nearest(weight), state);
+            assert_eq!(state.weight(), weight);
+            assert_eq!(state.glyph(), glyph);
+        }
+
+        let mut interests = InterestModel(BTreeMap::from([("rust".to_owned(), 0.7)]));
+        let fractional = topic_rows(&interests).remove(0);
+        assert_eq!(fractional.state.as_str(), "boost");
+        assert_eq!(fractional.weight.as_str(), "+");
+        assert!(fractional.weight_tooltip.contains("exact weight +0.70"));
+        assert_eq!(
+            interests.weight("rust"),
+            0.7,
+            "rendering must not mutate storage"
+        );
+
+        interests.set("rust", InterestState::Boost.weight());
+        let snapped = topic_rows(&interests).remove(0);
+        assert_eq!(interests.weight("rust"), 1.0);
+        assert!(snapped.weight_tooltip.is_empty());
+        interests.set("rust", InterestState::Mute.weight());
+        assert_eq!(interests.affinity("rust"), 0.0);
+    }
+
+    #[test]
     fn article_briefs_are_badged_but_do_not_enrich_topic_cards() {
         let mut brief = report(
             7,
@@ -2097,6 +2602,8 @@ mod tests {
             kind: "what".to_owned(),
             body: "A native section".to_owned(),
             quotes: vec![],
+            series: None,
+            images: vec![],
         }];
 
         assert_eq!(

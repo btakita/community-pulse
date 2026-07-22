@@ -1,6 +1,6 @@
 use crate::domain::{
     ChatMessage, ChatRole, DigestCard, InterestModel, ResearchReport, ResearchRun, SourceStatus,
-    TrendEvidence,
+    SourceWeight, TrendEvidence,
 };
 use chrono::{DateTime, Utc};
 use lazily::{Computed, Source, ThreadSafeContext};
@@ -23,6 +23,7 @@ pub struct UiSnapshot {
     pub ingest_enabled: bool,
     pub last_ingest_at: Option<DateTime<Utc>>,
     pub source_status: Vec<SourceStatus>,
+    pub source_weights: Vec<SourceWeight>,
     pub ingest_message: String,
     pub status: String,
 }
@@ -46,6 +47,7 @@ pub struct PulseState {
     ingest_enabled: Source<bool>,
     last_ingest_at: Source<Option<DateTime<Utc>>>,
     source_status: Source<Vec<SourceStatus>>,
+    source_weights: Source<Vec<SourceWeight>>,
     ingest_message: Source<String>,
     next_message_id: Source<u64>,
     status: Computed<String>,
@@ -58,6 +60,7 @@ impl PulseState {
         tracked_topics: Vec<String>,
         suggested_topics: Vec<String>,
         delta_chips: Vec<String>,
+        source_weights: Vec<SourceWeight>,
         research: Vec<ResearchReport>,
     ) -> Self {
         let context = ThreadSafeContext::new();
@@ -83,6 +86,7 @@ impl PulseState {
         let ingest_enabled = context.source(true);
         let last_ingest_at = context.source(None::<DateTime<Utc>>);
         let source_status = context.source(Vec::<SourceStatus>::new());
+        let source_weights = context.source(source_weights);
         let ingest_message = context.source("ingest ready".to_owned());
         let next_message_id = context.source(1_u64);
         let status = context.computed(move |compute| {
@@ -111,6 +115,7 @@ impl PulseState {
             ingest_enabled,
             last_ingest_at,
             source_status,
+            source_weights,
             ingest_message,
             next_message_id,
             status,
@@ -135,6 +140,7 @@ impl PulseState {
             ingest_enabled: self.context.get(&self.ingest_enabled),
             last_ingest_at: self.context.get(&self.last_ingest_at),
             source_status: self.context.get(&self.source_status),
+            source_weights: self.context.get(&self.source_weights),
             ingest_message: self.context.get(&self.ingest_message),
             status: self.context.get(&self.status),
         }
@@ -150,6 +156,10 @@ impl PulseState {
 
     pub fn set_digest(&self, digest: Vec<DigestCard>) {
         self.context.set(&self.digest, digest);
+    }
+
+    pub fn set_source_weights(&self, source_weights: Vec<SourceWeight>) {
+        self.context.set(&self.source_weights, source_weights);
     }
 
     pub fn set_budget(&self, budget: usize) {

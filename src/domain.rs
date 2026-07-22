@@ -34,11 +34,39 @@ pub struct DigestCard {
     pub interest_affinity: f64,
     pub baseline_mean: f64,
     pub baseline_stddev: f64,
+    pub weighted_mentions_1h: f64,
+    pub weighted_mentions_6h: f64,
+    pub weighted_mentions_24h: f64,
+    pub weighted_baseline_mean: f64,
+    pub weighted_baseline_stddev: f64,
     pub z_score: f64,
     pub mentions_1h: usize,
     pub mentions_6h: usize,
     pub mentions_24h: usize,
     pub sparkline: Vec<usize>,
+    pub chart_buckets: Vec<ChartBucket>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChartBucket {
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+    pub mentions: usize,
+    pub source_counts: Vec<SourceMentionCount>,
+    pub posts: Vec<ChartPost>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceMentionCount {
+    pub source: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChartPost {
+    pub source: String,
+    pub title: String,
+    pub url: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -47,6 +75,9 @@ pub struct EvidencePost {
     pub title: String,
     pub url: String,
     pub summary: String,
+    pub matched_alias: String,
+    pub points: i64,
+    pub points_percentile: f64,
     pub published_at: DateTime<Utc>,
 }
 
@@ -74,15 +105,33 @@ pub struct ResearchQuote {
     pub author: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResearchSectionSeries {
+    pub label: String,
+    pub points: Vec<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<f64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResearchImage {
+    pub path: String,
+    pub caption: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResearchSection {
     pub kind: String,
     pub body: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub quotes: Vec<ResearchQuote>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series: Option<ResearchSectionSeries>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ResearchImage>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResearchSubmission {
     pub topic_id: String,
     pub agent: String,
@@ -140,6 +189,7 @@ pub struct ResearchPost {
     pub title: String,
     pub url: String,
     pub points: i64,
+    pub points_percentile: f64,
     pub published_at: DateTime<Utc>,
 }
 
@@ -176,6 +226,13 @@ pub struct SourceStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SourceWeight {
+    pub source: String,
+    pub average_daily_posts: f64,
+    pub weight: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrendEvidence {
     pub id: String,
     pub topic: String,
@@ -184,8 +241,12 @@ pub struct TrendEvidence {
     pub mentions_24h: usize,
     pub baseline_mean: f64,
     pub baseline_stddev: f64,
+    pub weighted_mentions_6h: f64,
+    pub weighted_baseline_mean: f64,
+    pub weighted_baseline_stddev: f64,
     pub z_score: f64,
     pub sparkline: Vec<usize>,
+    pub chart_buckets: Vec<ChartBucket>,
     pub posts: Vec<EvidencePost>,
 }
 
@@ -205,6 +266,10 @@ impl InterestModel {
         } else {
             self.0.insert(topic, weight.clamp(-1.0, 2.0));
         }
+    }
+
+    pub fn set_muted(&mut self, topic: impl Into<String>, muted: bool) {
+        self.0.insert(topic.into(), if muted { -1.0 } else { 0.0 });
     }
 
     pub fn affinity(&self, topic: &str) -> f64 {
@@ -247,6 +312,11 @@ pub struct TopicScore {
     pub mentions_24h: usize,
     pub baseline_mean: f64,
     pub baseline_stddev: f64,
+    pub weighted_mentions_1h: f64,
+    pub weighted_mentions_6h: f64,
+    pub weighted_mentions_24h: f64,
+    pub weighted_baseline_mean: f64,
+    pub weighted_baseline_stddev: f64,
     pub z_score: f64,
     pub trend_score: f64,
     pub captured_at: DateTime<Utc>,

@@ -1,9 +1,9 @@
 import { LineEdit, Palette, ScrollView } from "std-widgets.slint";
 import "fonts/InstrumentSans[wdth,wght].ttf";
 import "fonts/JetBrainsMono[wght].ttf";
-import { DigestRow, TopicRow, ChatRow, EvidencePostRow, EvidenceRow, ResearchTitleRow, ResearchSummaryRow, SuggestedTopicRow, ResearchSectionRow, ReportBlockRow, CitationRow, SourceStatusRow } from "models.slint";
+import { ChartBucketRow, DigestRow, TopicRow, ChatRow, EvidencePostRow, EvidenceRow, ResearchTitleRow, ResearchSummaryRow, SuggestedTopicRow, ResearchSectionRow, ReportBlockRow, CitationRow, SourceStatusRow } from "models.slint";
 import { Tokens } from "theme.slint";
-import { ChevronIconButton, CloseIconButton, CopyIconButton } from "icons.slint";
+import { ChevronIconButton, CloseIconButton, CopyIconButton, HoverTooltip, InfoIconButton } from "icons.slint";
 
 component MonoLabel inherits Text {
     color: Tokens.ink-3;
@@ -35,6 +35,37 @@ component FlatAction inherits Rectangle {
     }
 
     touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+component InterestSegment inherits Rectangle {
+    in property <string> text;
+    in property <bool> active: false;
+    in property <color> tone: Tokens.accent;
+    in property <string> tooltip-text: "";
+    callback clicked();
+
+    min-width: 27px;
+    height: 24px;
+    border-radius: 5px;
+    border-width: 1px;
+    border-color: active ? tone : Tokens.line-strong;
+    background: active ? tone : (hover.hovered ? Tokens.raised : Tokens.surface);
+
+    Text {
+        text: root.text;
+        color: root.active ? #FFFFFF : Tokens.ink-2;
+        font-family: "JetBrains Mono";
+        font-size: 9.5px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    hover := HoverTooltip {
+        text: root.tooltip-text;
+        clickable: true;
         clicked => { root.clicked(); }
     }
 }
@@ -112,11 +143,18 @@ component SparkChart inherits Rectangle {
     in property <float> end-x: 113;
     in property <float> end-y: 31;
     in property <float> baseline-y: -1;
+    in property <[ChartBucketRow]> buckets;
+    in property <string> context-label: "";
+    callback open-url(string);
+    private property <length> plot-height: root.height - (root.buckets.length > 0 ? 13px : 0px);
+    private property <int> hover-index: chart-hover.hovered && root.buckets.length > 0
+        ? min(root.buckets.length - 1, max(0, round(chart-hover.mouse-x / root.width * root.buckets.length - 0.5)))
+        : -1;
 
     background: transparent;
 
     if large && root.baseline-y >= 0: HorizontalLayout {
-        y: parent.height * root.baseline-y / 34;
+        y: root.plot-height * root.baseline-y / 34;
         height: 1px;
         spacing: 5px;
         for dash in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]: Rectangle {
@@ -127,7 +165,7 @@ component SparkChart inherits Rectangle {
 
     Path {
         width: parent.width;
-        height: parent.height;
+        height: root.plot-height;
         viewbox-width: 116;
         viewbox-height: 34;
         fit: fill;
@@ -137,7 +175,7 @@ component SparkChart inherits Rectangle {
     }
     Path {
         width: parent.width;
-        height: parent.height;
+        height: root.plot-height;
         viewbox-width: 116;
         viewbox-height: 34;
         fit: fill;
@@ -150,13 +188,80 @@ component SparkChart inherits Rectangle {
     }
     Rectangle {
         x: parent.width * root.end-x / 116 - self.width / 2;
-        y: parent.height * root.end-y / 34 - self.height / 2;
+        y: root.plot-height * root.end-y / 34 - self.height / 2;
         width: large ? 7px : 6px;
         height: self.width;
         border-radius: self.width / 2;
         border-width: large ? 1.5px : 1px;
         border-color: Tokens.surface;
         background: root.tone;
+    }
+
+    if root.hover-index >= 0: Rectangle {
+        x: parent.width * root.buckets[root.hover-index].point-x / 116 - self.width / 2;
+        width: 1px;
+        height: root.plot-height;
+        background: root.tone;
+        opacity: 0.24;
+    }
+
+    if root.hover-index >= 0: Rectangle {
+        x: parent.width * root.buckets[root.hover-index].point-x / 116 - self.width / 2;
+        y: root.plot-height * root.buckets[root.hover-index].point-y / 34 - self.height / 2;
+        width: large ? 8px : 7px;
+        height: self.width;
+        border-radius: self.width / 2;
+        border-width: 1.5px;
+        border-color: Tokens.surface;
+        background: root.tone;
+    }
+
+    if root.buckets.length > 0: Rectangle {
+        y: root.plot-height + 2px;
+        height: 11px;
+        background: transparent;
+        Text {
+            x: 0;
+            width: parent.width / 3;
+            text: root.buckets[0].start-label;
+            color: Tokens.ink-3;
+            font-family: "JetBrains Mono";
+            font-size: 7px;
+        }
+        Text {
+            x: parent.width / 3;
+            width: parent.width / 3;
+            text: root.context-label;
+            color: Tokens.ink-3;
+            font-family: "JetBrains Mono";
+            font-size: 7px;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            x: parent.width * 2 / 3;
+            width: parent.width / 3;
+            text: root.buckets[root.buckets.length - 1].end-label;
+            color: Tokens.ink-3;
+            font-family: "JetBrains Mono";
+            font-size: 7px;
+            horizontal-alignment: right;
+        }
+    }
+
+    chart-hover := HoverTooltip {
+        width: parent.width;
+        height: root.plot-height;
+        text: root.hover-index >= 0 ? root.buckets[root.hover-index].tooltip : "";
+        anchor-x: root.hover-index >= 0
+            ? parent.width * root.buckets[root.hover-index].point-x / 116
+            : -1px;
+        clickable: root.hover-index >= 0 && root.buckets[root.hover-index].url != "";
+        clicked => {
+            if (root.hover-index >= 0 && root.buckets[root.hover-index].url != "") {
+                root.open-url(root.buckets[root.hover-index].url);
+            }
+        }
     }
 }
 
@@ -166,10 +271,10 @@ component TopicChannel inherits Rectangle {
         data.id == "local-first" ? Tokens.local :
         data.id == "ai-infra" ? Tokens.ai :
         data.id == "wasm-runtimes" ? Tokens.wasm : Tokens.steel;
-    in property <float> visual-weight: (data.weight-value + 1.0) / 3.0;
     callback set-weight(float);
+    callback remove-topic();
 
-    height: 67px;
+    height: 76px;
     border-radius: 10px;
     border-width: 1px;
     border-color: Tokens.line;
@@ -202,70 +307,111 @@ component TopicChannel inherits Rectangle {
                 vertical-alignment: center;
                 horizontal-stretch: 1;
             }
-            Text {
-                text: data.muted ? "off" : data.weight;
-                color: data.muted ? Tokens.ink-3 : Tokens.ink-2;
-                font-family: "JetBrains Mono";
-                font-size: 10px;
-                vertical-alignment: center;
-            }
-            mute := Rectangle {
-                width: 22px;
-                height: 22px;
-                border-radius: 6px;
-                border-width: 1px;
-                border-color: data.muted ? root.topic-color : Tokens.line-strong;
-                background: data.muted ? root.topic-color : Tokens.raised;
-                Text {
-                    text: "M";
-                    color: data.muted ? #FFFFFF : Tokens.ink-2;
-                    font-family: "JetBrains Mono";
-                    font-size: 9px;
-                    font-weight: 700;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+            remove := Rectangle {
+                width: 26px;
+                height: 26px;
+                background: transparent;
+                CloseIconButton {
+                    width: parent.width;
+                    height: parent.height;
                 }
-                TouchArea {
-                    clicked => { root.set-weight(data.muted ? 0.0 : -1.0); }
-                }
+            remove-hover := HoverTooltip {
+                width: parent.width;
+                height: parent.height;
+                text: "remove from mix (topic stays eligible — use − to exclude)";
+                align-right: true;
+                    clickable: true;
+                clicked => { root.remove-topic(); }
             }
         }
+        }
 
-        fader := Rectangle {
-            height: 14px;
-            background: transparent;
-            Rectangle {
-                x: 0;
-                y: 5px;
-                width: parent.width;
-                height: 4px;
-                border-radius: 2px;
-                background: Tokens.inset;
+        HorizontalLayout {
+            height: 24px;
+            spacing: 3px;
+            InterestSegment {
+                horizontal-stretch: 1;
+                text: "−";
+                tone: root.topic-color;
+                active: data.state == "mute";
+                tooltip-text: data.weight-tooltip;
+                clicked => { root.set-weight(-1.0); }
             }
-            Rectangle {
-                x: 0;
-                y: 5px;
-                width: parent.width * root.visual-weight;
-                height: 4px;
-                border-radius: 2px;
-                background: root.topic-color;
-                opacity: data.muted ? 0.25 : 0.82;
+            InterestSegment {
+                horizontal-stretch: 1;
+                text: "+";
+                tone: root.topic-color;
+                active: data.state == "boost";
+                tooltip-text: data.weight-tooltip;
+                clicked => { root.set-weight(1.0); }
             }
-            Rectangle {
-                x: (parent.width - self.width) * root.visual-weight;
-                y: 1px;
-                width: 12px;
-                height: 12px;
-                border-radius: 6px;
-                border-width: 2px;
-                border-color: data.muted ? Tokens.ink-3 : root.topic-color;
-                background: Tokens.surface;
+            InterestSegment {
+                horizontal-stretch: 1;
+                text: "++";
+                tone: root.topic-color;
+                active: data.state == "strong";
+                tooltip-text: data.weight-tooltip;
+                clicked => { root.set-weight(2.0); }
             }
-            TouchArea {
-                clicked => {
-                root.set-weight(self.mouse-x / self.width * 3.0 - 1.0);
-                }
+        }
+    }
+}
+
+component MethodologyDisclosure inherits Rectangle {
+    in property <string> ingest;
+    in property <string> categorize;
+    in property <string> score;
+    in property <string> surface;
+    callback close();
+
+    height: methodology-layout.preferred-height;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: Tokens.line-strong;
+    background: Tokens.raised;
+
+    methodology-layout := VerticalLayout {
+        padding: 11px;
+        spacing: 8px;
+        HorizontalLayout {
+            height: 26px;
+            MonoLabel { text: "METHODOLOGY"; horizontal-stretch: 1; }
+            ChevronIconButton {
+                open: true;
+                clicked => { root.close(); }
             }
+        }
+        for step in [root.ingest, root.categorize, root.score, root.surface]: Text {
+            text: step;
+            color: Tokens.ink-2;
+            font-size: 9.5px;
+            wrap: word-wrap;
+            height: self.preferred-height;
+        }
+    }
+}
+
+component RankBreakdownDisclosure inherits Rectangle {
+    in property <string> rank-line;
+    in property <string> trend-line;
+
+    height: breakdown-layout.preferred-height;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: Tokens.line-strong;
+    background: Tokens.raised;
+
+    breakdown-layout := VerticalLayout {
+        padding: 11px;
+        spacing: 7px;
+        MonoLabel { text: "WHY THIS RANK"; }
+        for line in [root.rank-line, root.trend-line]: Text {
+            text: line;
+            color: Tokens.ink-2;
+            font-family: "JetBrains Mono";
+            font-size: 9px;
+            wrap: word-wrap;
+            height: self.preferred-height;
         }
     }
 }
@@ -357,56 +503,6 @@ component AttentionBudgetMaster inherits Rectangle {
                     border-radius: 1px;
                     background: segment <= root.count ? Tokens.accent : Tokens.inset;
                 }
-            }
-        }
-    }
-}
-
-component HoverTooltip inherits Rectangle {
-    in property <string> text;
-    in property <bool> align-right: false;
-    in property <bool> clickable: false;
-    out property <bool> hovered: hover.has-hover;
-    callback clicked();
-    private property <bool> ready: false;
-
-    background: transparent;
-    clip: false;
-
-    Timer {
-        interval: 350ms;
-        running: hover.has-hover && root.text != "" && !root.ready;
-        triggered => { root.ready = true; }
-    }
-
-    if root.ready && hover.has-hover: tooltip := Rectangle {
-        x: root.align-right ? root.width - self.width : 0px;
-        y: -self.height - 7px;
-        width: min(280px, max(150px, tooltip-text.preferred-width + 18px));
-        height: tooltip-text.preferred-height + 16px;
-        z: 1000;
-        border-radius: 6px;
-        border-width: 1px;
-        border-color: Tokens.line;
-        background: Tokens.raised;
-        tooltip-text := Text {
-            x: 9px;
-            y: 8px;
-            width: parent.width - 18px;
-            text: root.text;
-            color: Tokens.ink-2;
-            font-family: "JetBrains Mono";
-            font-size: 9px;
-            wrap: word-wrap;
-        }
-    }
-
-    hover := TouchArea {
-        mouse-cursor: root.clickable ? pointer : default;
-        clicked => { root.clicked(); }
-        changed has-hover => {
-            if (!self.has-hover) {
-                root.ready = false;
             }
         }
     }
@@ -505,6 +601,13 @@ component EvidencePanel inherits Rectangle {
     in property <bool> claude-running: false;
     in property <bool> codex-running: false;
     in property <int> progress-phase: 0;
+    in property <string> methodology-formula;
+    in property <string> methodology-ingest;
+    in property <string> methodology-categorize;
+    in property <string> methodology-score;
+    in property <string> methodology-surface;
+    private property <bool> methodology-open: false;
+    private property <bool> rank-open: false;
     callback open-url(string);
     callback view-research();
     callback select-research(int);
@@ -569,6 +672,9 @@ component EvidencePanel inherits Rectangle {
                 end-x: data.spark-end-x;
                 end-y: data.spark-end-y;
                 baseline-y: data.baseline-y;
+                buckets: data.chart-buckets;
+                context-label: "hourly mentions · last 12h";
+                open-url(url) => { root.open-url(url); }
             }
             Text {
                 text: "7-day baseline";
@@ -583,7 +689,7 @@ component EvidencePanel inherits Rectangle {
         HorizontalLayout {
             height: 36px;
             spacing: 18px;
-            EvidenceStat { label: "MENTIONS / 6H"; value: data.mentions; horizontal-stretch: 1; }
+        EvidenceStat { label: "MENTIONS / 6H"; value: data.mentions; tooltip: data.mention-tooltip; horizontal-stretch: 1; }
             EvidenceStat { label: "7-DAY BASELINE"; value: data.baseline-value; horizontal-stretch: 1; }
                 EvidenceStat { label: "Z-SCORE"; value: data.z-score; tooltip: data.z-tooltip; accent: true; horizontal-stretch: 1; }
             EvidenceStat { label: "FIRST SEEN"; value: data.first-seen; horizontal-stretch: 1; }
@@ -686,12 +792,13 @@ component EvidencePanel inherits Rectangle {
                     y: 37px;
                     width: parent.width;
                     height: 1px;
-                    background: post-touch.has-hover ? Tokens.accent : transparent;
+                    background: post-touch.hovered ? Tokens.accent : transparent;
                 }
-                post-touch := TouchArea {
+                post-touch := HoverTooltip {
                     width: parent.width - 210px;
                     height: 38px;
-                    mouse-cursor: pointer;
+                    text: post.match-tooltip;
+                    clickable: true;
                     clicked => { root.open-url(post.url); }
                 }
                 if post.summary != "": summary-glyph := Rectangle {
@@ -841,12 +948,40 @@ component EvidencePanel inherits Rectangle {
             background: transparent;
         }
 
-        Text {
-            text: "rank = trend × interest · trend = velocity × (1 + z⁺/4) + sources/2";
-            color: Tokens.ink-3;
-            font-family: "JetBrains Mono";
-            font-size: 8.5px;
+            HorizontalLayout {
+                height: 26px;
+                spacing: 7px;
+                Text {
+                    text: root.methodology-formula;
+                    color: Tokens.ink-3;
+                    font-family: "JetBrains Mono";
+                    font-size: 8.5px;
+                    overflow: elide;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+        InfoIconButton {
+                    tooltip: root.methodology-formula;
+                    open: root.methodology-open;
+                    align-right: true;
+            clicked => { root.methodology-open = !root.methodology-open; }
         }
+        ChevronIconButton {
+            open: root.rank-open;
+            clicked => { root.rank-open = !root.rank-open; }
+        }
+    }
+    if root.rank-open: RankBreakdownDisclosure {
+        rank-line: data.rank-line;
+        trend-line: data.trend-line;
+    }
+    if root.methodology-open: MethodologyDisclosure {
+                ingest: root.methodology-ingest;
+                categorize: root.methodology-categorize;
+                score: root.methodology-score;
+                surface: root.methodology-surface;
+                close => { root.methodology-open = false; }
+            }
     }
 }
 
@@ -862,6 +997,11 @@ component DigestCard inherits Rectangle {
     in property <bool> claude-running: false;
     in property <bool> codex-running: false;
     in property <int> research-progress-phase: 0;
+    in property <string> methodology-formula;
+    in property <string> methodology-ingest;
+    in property <string> methodology-categorize;
+    in property <string> methodology-score;
+    in property <string> methodology-surface;
     in property <bool> selected: false;
     in property <int> rank: 1;
     in property <color> topic-color: data.id == "rust" ? Tokens.rust :
@@ -876,7 +1016,7 @@ component DigestCard inherits Rectangle {
     callback open-url(string);
 
     clip: false;
-    height: selected ? card-layout.preferred-height + 26px : data.research-summary == "" ? 84px : 116px;
+    height: selected ? card-layout.preferred-height + 26px : data.research-summary == "" ? 92px : 124px;
     border-radius: 12px;
     border-width: 1px;
     border-color: selected ? Tokens.accent : Tokens.line;
@@ -983,12 +1123,14 @@ component DigestCard inherits Rectangle {
                     width: 104px;
                     spacing: 4px;
                     SparkChart {
-                        height: 34px;
+                        height: 46px;
                         tone: Tokens.rise;
                         line-path: data.spark-line;
                         area-path: data.spark-area;
                         end-x: data.spark-end-x;
                         end-y: data.spark-end-y;
+                        buckets: data.chart-buckets;
+                        open-url(url) => { root.open-url(url); }
                     }
                 Rectangle {
                     height: 14px;
@@ -1049,7 +1191,12 @@ component DigestCard inherits Rectangle {
         codex-progress: root.codex-progress;
         claude-running: root.claude-running;
         codex-running: root.codex-running;
-        progress-phase: root.research-progress-phase;
+            progress-phase: root.research-progress-phase;
+            methodology-formula: root.methodology-formula;
+            methodology-ingest: root.methodology-ingest;
+            methodology-categorize: root.methodology-categorize;
+            methodology-score: root.methodology-score;
+            methodology-surface: root.methodology-surface;
             open-url(url) => { root.open-url(url); }
             view-research => { root.view-research(data.research-id); }
             select-research(id) => { root.view-research(id); }
@@ -1340,7 +1487,12 @@ component ResearchReportPane inherits Rectangle {
             font-weight: 680;
             wrap: word-wrap;
         }
-            report-scroll := ScrollView {
+        if root.web-report != "": FlatAction {
+            text: "Open full brief ↗";
+            active: true;
+            clicked => { root.open-url(root.web-report); }
+        }
+        report-scroll := ScrollView {
                 vertical-stretch: 1;
                 report-content := VerticalLayout {
                     width: root.structured
@@ -1371,6 +1523,40 @@ component ResearchReportPane inherits Rectangle {
                             default-font-size: 10.5px;
                             link-color: Tokens.accent;
                             link-clicked(link) => { root.open-url(link); }
+                        }
+                        if section.series-label != "": VerticalLayout {
+                            height: 112px;
+                            spacing: 5px;
+                            MonoLabel {
+                                text: section.series-label + " · " + section.series-point-count + " POINTS";
+                                color: Tokens.accent;
+                            }
+                            SparkChart {
+                                height: 94px;
+                                large: true;
+                                line-path: section.series-line;
+                                area-path: section.series-area;
+                                end-x: section.series-end-x;
+                                end-y: section.series-end-y;
+                                baseline-y: section.series-baseline-y;
+                                buckets: section.series-buckets;
+                                context-label: "series";
+                            }
+                        }
+                        for figure in section.images: VerticalLayout {
+                            spacing: 5px;
+                            Image {
+                                height: 166px;
+                                source: figure.source;
+                                image-fit: contain;
+                            }
+                            if figure.caption != "": Text {
+                                text: figure.caption;
+                                color: Tokens.ink-3;
+                                font-size: 8.5px;
+                                wrap: word-wrap;
+                                horizontal-alignment: center;
+                            }
                         }
                         for quote in section.quotes: Rectangle {
                             height: quote-text.preferred-height + 28px;
@@ -1441,10 +1627,6 @@ component ResearchReportPane inherits Rectangle {
                         clicked => { root.open-url(citation.url); }
                     }
                 }
-                if root.web-report != "": FlatAction {
-                    text: "Open web report  ↗";
-                    clicked => { root.open-url(root.web-report); }
-                }
             }
         }
     }
@@ -1509,12 +1691,19 @@ export component AppWindow inherits Window {
     in-out property <string> mcp-status: "mcp off";
     in-out property <bool> mcp-active: false;
     in-out property <string> status: "";
+    in-out property <string> methodology-formula: "";
+    in-out property <string> methodology-ingest: "";
+    in-out property <string> methodology-categorize: "";
+    in-out property <string> methodology-score: "";
+    in-out property <string> methodology-surface: "";
     private property <string> chat-input: "";
     private property <bool> mix-collapsed: false;
+    private property <bool> methodology-open: false;
     private property <length> right-pane-width: 420px;
 
     callback refresh-requested();
     callback set-interest(string, float);
+    callback set-muted(string, bool);
     callback set-budget(int);
     callback explain-requested(string);
     callback clear-evidence();
@@ -1553,6 +1742,7 @@ export component AppWindow inherits Window {
                 padding-left: 16px;
                 padding-right: 17px;
                 spacing: 8px;
+                cross-axis-alignment: center;
                 Rectangle { width: 11px; height: 11px; border-radius: 6px; background: #E16B62; }
                 Rectangle { width: 11px; height: 11px; border-radius: 6px; background: #E1AD47; }
                 Rectangle { width: 11px; height: 11px; border-radius: 6px; background: #52A56D; }
@@ -1770,14 +1960,15 @@ export component AppWindow inherits Window {
                             spacing: 10px;
 
                             VerticalLayout {
-                                height: root.topics.length * 80px - 9px;
+                                height: root.topics.length * 85px - 9px;
                                 vertical-stretch: 0;
                                 spacing: 9px;
                                 for topic in root.topics: TopicChannel {
-                                    width: mix-content.width;
-                                    data: topic;
-                                    set-weight(weight) => { root.set-interest(topic.id, weight); }
-                                }
+                                width: mix-content.width;
+                                data: topic;
+                                set-weight(weight) => { root.set-interest(topic.id, weight); }
+                                remove-topic => { root.set-interest(topic.id, 0.0); }
+                            }
                             }
 
                             MonoLabel { text: "SUGGESTED"; }
@@ -1851,13 +2042,28 @@ export component AppWindow inherits Window {
                     padding: 18px;
                     spacing: 12px;
                     HorizontalLayout {
-                        MonoLabel { text: "TODAY'S PULSE"; horizontal-stretch: 1; }
+                        height: 26px;
+                        spacing: 8px;
+                        MonoLabel { text: "TODAY'S PULSE"; }
+                        InfoIconButton {
+                            tooltip: root.methodology-formula;
+                            open: root.methodology-open;
+                            clicked => { root.methodology-open = !root.methodology-open; }
+                        }
+                        Rectangle { background: transparent; horizontal-stretch: 1; }
                         Text {
                             text: root.digest.length + " of 214 items surfaced  ·  budget " + root.attention-budget;
                             color: Tokens.ink-3;
                             font-family: "JetBrains Mono";
                             font-size: 8.5px;
                         }
+                    }
+                    if root.methodology-open: MethodologyDisclosure {
+                        ingest: root.methodology-ingest;
+                        categorize: root.methodology-categorize;
+                        score: root.methodology-score;
+                        surface: root.methodology-surface;
+                        close => { root.methodology-open = false; }
                     }
                     ScrollView {
                         vertical-stretch: 1;
@@ -1875,7 +2081,12 @@ export component AppWindow inherits Window {
                 codex-progress: root.evidence-codex-progress;
                 claude-running: root.evidence-claude-running;
                 codex-running: root.evidence-codex-running;
-                research-progress-phase: root.research-progress-phase;
+                                research-progress-phase: root.research-progress-phase;
+                                methodology-formula: root.methodology-formula;
+                                methodology-ingest: root.methodology-ingest;
+                                methodology-categorize: root.methodology-categorize;
+                                methodology-score: root.methodology-score;
+                                methodology-surface: root.methodology-surface;
                 selected: root.has-evidence && root.evidence.id == card.id;
                         explain => { root.explain-requested(card.id); }
                         subscribe => { root.subscribe-requested(card.id); }

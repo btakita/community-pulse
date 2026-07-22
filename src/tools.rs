@@ -1,5 +1,6 @@
 use crate::domain::{
-    Citation, CommunityPost, MAX_BUDGET, ResearchEnrichment, ResearchSection, ResearchSubmission,
+    Citation, CommunityPost, MAX_BUDGET, ResearchEnrichment, ResearchImage, ResearchSection,
+    ResearchSubmission,
 };
 use crate::engine::{PulseEngine, canonical_topic};
 use crate::reactive::{PulseState, UiSnapshot};
@@ -25,11 +26,13 @@ pub struct ToolBridge {
 
 impl ToolBridge {
     pub fn new(engine: PulseEngine) -> Result<Self> {
+        let now = Utc::now();
         let budget = engine.budget()?;
         let interests = engine.load_interests()?;
         let subscriptions = engine.subscriptions()?;
         let suggested = engine.suggested_topics(8)?;
         let delta_chips = engine.digest_delta_chips(&interests)?;
+        let source_weights = engine.source_weights(now)?;
         let research = engine.list_research(None)?;
         Ok(Self {
             engine: Arc::new(Mutex::new(engine)),
@@ -39,6 +42,7 @@ impl ToolBridge {
                 subscriptions,
                 suggested,
                 delta_chips,
+                source_weights,
                 research,
             ),
         })
@@ -54,8 +58,10 @@ impl ToolBridge {
 
     pub fn get_pulse(&self, limit: Option<usize>) -> Result<Value> {
         let engine = self.engine.lock().expect("pulse engine lock poisoned");
-        let cards = engine.get_pulse(&self.state.interests(), limit, Utc::now())?;
+        let now = Utc::now();
+        let cards = engine.get_pulse(&self.state.interests(), limit, now)?;
         let budget = engine.budget()?;
+        self.state.set_source_weights(engine.source_weights(now)?);
         self.state.set_budget(budget);
         self.state.set_digest(cards.clone());
         Ok(json!({
@@ -67,9 +73,11 @@ impl ToolBridge {
 
     pub fn refresh_scores(&self) -> Result<Value> {
         let mut engine = self.engine.lock().expect("pulse engine lock poisoned");
-        engine.recompute(Utc::now())?;
-        let cards = engine.get_pulse(&self.state.interests(), None, Utc::now())?;
+        let now = Utc::now();
+        engine.recompute(now)?;
+        let cards = engine.get_pulse(&self.state.interests(), None, now)?;
         let suggested = engine.suggested_topics(8)?;
+        self.state.set_source_weights(engine.source_weights(now)?);
         self.state.set_digest(cards.clone());
         self.state.set_suggested_topics(suggested);
         Ok(json!({ "count": cards.len(), "digest": cards }))
@@ -164,6 +172,23 @@ impl ToolBridge {
         self.state.set_interests(interests.clone());
         self.state.set_digest(cards.clone());
         Ok(json!({ "topic": topic, "weight": weight, "digest": cards }))
+    }
+
+    pub fn set_muted(&self, topic: &str, muted: bool) -> Result<Value> {
+        let topic = canonical_topic(topic);
+        let mut interests = self.state.interests();
+        interests.set_muted(&topic, muted);
+        let engine = self.engine.lock().expect("pulse engine lock poisoned");
+        engine.set_muted(&topic, muted)?;
+        let cards = engine.get_pulse(&interests, None, Utc::now())?;
+        self.state.set_interests(interests.clone());
+        self.state.set_digest(cards.clone());
+        Ok(json!({
+            "topic": topic,
+            "muted": muted,
+            "weight": interests.weight(&topic),
+            "digest": cards
+        }))
     }
 
     pub fn explain_trend(&self, id: &str) -> Result<Value> {
@@ -313,19 +338,23 @@ impl ToolBridge {
         }
         let engine = self.engine.lock().expect("pulse engine lock poisoned");
         let mut submission = submission;
-        let warning = if let Some(url) = submission.article_url.as_deref() {
-            if engine.topic_has_post_url(&submission.topic_id, url)? {
-                None
-            } else {
-                let unmatched = submission.article_url.take().unwrap_or_default();
-                Some(format!(
-                    "article_url did not match a post for {}; stored as topic-level research: {unmatched}",
-                    submission.topic_id
-                ))
-            }
-        } else {
-            None
-        };
+        let mut warnings = Vec::new();
+        if submission.web_report.is_none() {
+            warnings.push(
+                "web_report is missing; the full-brief template requirement was not satisfied"
+                    .to_owned(),
+            );
+        }
+        if let Some(url) = submission.article_url.as_deref()
+            && !engine.topic_has_post_url(&submission.topic_id, url)?
+        {
+            let unmatched = submission.article_url.take().unwrap_or_default();
+            warnings.push(format!(
+                "article_url did not match a post for {}; stored as topic-level research: {unmatched}",
+                submission.topic_id
+            ));
+        }
+        let warning = (!warnings.is_empty()).then(|| warnings.join("; "));
         let report = engine.submit_research(&submission, Utc::now())?;
         let research = engine.list_research(None)?;
         self.state.set_research(research.clone());
@@ -573,9 +602,9 @@ impl ToolBridge {
                                     "properties": {
                                         "kind": { "type": "string", "enum": ["what", "substance", "reaction", "credibility", "watch"] },
                                         "body": { "type": "string" },
-                                        "quotes": {
-                                            "type": "array",
-                                            "maxItems": 3,
+                            "quotes": {
+                                "type": "array",
+                                "maxItems": 3,
                                             "items": {
                                                 "type": "object",
                                                 "properties": {
@@ -584,10 +613,32 @@ impl ToolBridge {
                                                     "author": { "type": "string" }
                                                 },
                                                 "required": ["text", "url"],
-                                                "additionalProperties": false
-                                            }
-                                        }
+                                    "additionalProperties": false
+                                }
+                            },
+                            "series": {
+                                "type": "object",
+                                "properties": {
+                                    "label": { "type": "string" },
+                                    "points": { "type": "array", "items": { "type": "number" } },
+                                    "baseline": { "type": "number" }
+                                },
+                                "required": ["label", "points"],
+                                "additionalProperties": false
+                            },
+                            "images": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "path": { "type": "string" },
+                                        "caption": { "type": "string" }
                                     },
+                                    "required": ["path", "caption"],
+                                    "additionalProperties": false
+                                }
+                            }
+                        },
                                     "required": ["kind", "body"],
                                     "additionalProperties": false
                                 }
@@ -677,7 +728,14 @@ fn validate_sections(
     sections
         .into_iter()
         .map(|section| {
-            let kind = section.kind.trim().to_ascii_lowercase();
+            let ResearchSection {
+                kind,
+                body,
+                quotes,
+                series,
+                images,
+            } = section;
+            let kind = kind.trim().to_ascii_lowercase();
             if !matches!(
                 kind.as_str(),
                 "what" | "substance" | "reaction" | "credibility" | "watch"
@@ -687,15 +745,14 @@ fn validate_sections(
             if !kinds.insert(kind.clone()) {
                 bail!("article brief section kind repeated: {kind}");
             }
-            let body = section.body.trim().to_owned();
+            let body = body.trim().to_owned();
             if body.is_empty() {
                 bail!("article brief section bodies cannot be empty");
             }
-            if section.quotes.len() > 3 {
+            if quotes.len() > 3 {
                 bail!("article brief sections accept at most 3 quotes");
             }
-            let quotes = section
-                .quotes
+            let quotes = quotes
                 .into_iter()
                 .map(|quote| {
                     let text = quote.text.trim().to_owned();
@@ -719,9 +776,48 @@ fn validate_sections(
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
-            Ok(ResearchSection { kind, body, quotes })
+            let series = series.map(|mut series| {
+                series.label = series.label.trim().to_owned();
+                series
+            });
+            let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+            let images = images
+                .into_iter()
+                .map(|image| {
+                    Ok(ResearchImage {
+                        path: validate_research_image_path_at(&image.path, repo_root)?,
+                        caption: image.caption.trim().to_owned(),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(ResearchSection {
+                kind,
+                body,
+                quotes,
+                series,
+                images,
+            })
         })
         .collect()
+}
+
+fn validate_research_image_path_at(path: &str, repo_root: &Path) -> Result<String> {
+    let path = Path::new(path.trim());
+    let candidate = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        repo_root.join(path)
+    }
+    .canonicalize()
+    .context("research image path must exist")?;
+    let assets_root = repo_root
+        .join("research/reports/assets")
+        .canonicalize()
+        .context("canonicalize research image assets root")?;
+    if !candidate.starts_with(&assets_root) {
+        bail!("research image path must be inside research/reports/assets/");
+    }
+    Ok(candidate.to_string_lossy().into_owned())
 }
 
 fn validate_enrichment(enrichment: ResearchEnrichment) -> Result<ResearchEnrichment> {
@@ -831,6 +927,53 @@ struct SubmitResearchArgs {
     summary: Option<String>,
     #[serde(default)]
     watch: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ToolBridge, validate_research_image_path_at};
+    use std::fs;
+
+    #[test]
+    fn research_images_are_canonicalized_inside_the_assets_allowlist_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let assets = directory.path().join("research/reports/assets");
+        fs::create_dir_all(&assets).unwrap();
+        let allowed = assets.join("chart.png");
+        fs::write(&allowed, "image fixture").unwrap();
+        let outside = directory.path().join("outside.png");
+        fs::write(&outside, "private").unwrap();
+
+        assert_eq!(
+            validate_research_image_path_at("research/reports/assets/chart.png", directory.path())
+                .unwrap(),
+            allowed.canonicalize().unwrap().to_string_lossy()
+        );
+        assert!(validate_research_image_path_at("outside.png", directory.path()).is_err());
+        assert!(
+            validate_research_image_path_at("https://example.com/chart.png", directory.path())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn submit_research_schema_exposes_series_and_images() {
+        let definitions = ToolBridge::tool_definitions();
+        let submit = definitions
+            .iter()
+            .find(|tool| tool["function"]["name"] == "submit_research")
+            .unwrap();
+        let section =
+            &submit["function"]["parameters"]["properties"]["sections"]["items"]["properties"];
+        assert_eq!(
+            section["series"]["properties"]["points"]["items"]["type"],
+            "number"
+        );
+        assert_eq!(
+            section["images"]["items"]["properties"]["path"]["type"],
+            "string"
+        );
+    }
 }
 
 #[derive(Deserialize, Default)]

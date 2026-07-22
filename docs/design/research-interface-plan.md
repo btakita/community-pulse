@@ -33,6 +33,9 @@ and shared SVG disclosure/close/copy affordances.
 - [x] Report readability follow-up: a pure markdown-lite block parser feeds one
 shared heading/paragraph/bullet/code renderer in the single report and both
 comparison panes, with bounded measure and block-level spacing.
+- [x] Rich briefs are implemented: report headers expose an accent "Open full
+brief ↗" action, both prompt templates always require a web report, and optional
+section series/images render natively with an assets-only canonical path rule.
 - [ ] Needs human review: real subscription logins/quota, presentation-machine
 doctor, live-provider timing, and final fallback assets. These are rehearsal,
 not code blockers.
@@ -390,6 +393,36 @@ UI, no window management, subscription-billed. If in-app agent
 conversation is wanted, build that follow-on; keep the real terminal
 (on its own i3 workspace) for the demo beat where the audience should
 SEE Claude Code being Claude Code.
+
+## Rich briefs: prominent artifact link + native graphs/images (operator request)
+
+Two upgrades to how briefs surface richness. Governing decision
+(unchanged): **markdown + structured data in-app, HTML in the web
+artifact** — Slint renders native, the artifact carries full-fidelity
+HTML one click away. We do NOT render HTML in Slint (no webview; the
+rejection in § Agent terminal lifecycle applies to embedding generally).
+
+1. **Prominent artifact link**: the report header (single view AND
+   comparison panes) shows an "Open full brief ↗" button (icon family,
+   accent) whenever `web_report` is set — not buried in citations.
+   Prompt templates change from "may publish" to **"always produce a web
+   report"**: Claude publishes an Artifact and passes the URL; Codex
+   writes the allowlisted HTML file. A brief without a web_report is
+   valid but the run doctor's template check warns.
+2. **Native graphs**: extend structured `sections` with an optional
+   `series` payload — `{ label, points: [numbers], baseline? }` —
+   rendered with the existing SparkChart/evidence-chart components
+   (same tokens, real chart, no image). The prompt template tells
+   agents: emit the numbers you charted, not a picture of them —
+   `get_series` output can be passed straight through.
+3. **Images (bounded)**: optional `images: [{ path, caption }]` on
+   sections, rendered with Slint `Image` — paths allowlisted to
+   `research/reports/assets/` only (same canonicalize + prefix rule as
+   file links; agents save generated charts/figures there). Remote URLs
+   are NOT fetched in-app — a remote image belongs in the web artifact.
+4. Markdown remains the text format everywhere in-app; no HTML parsing,
+   ever. Tests: series renders with N points; non-allowlisted image path
+   rejected; header link opens web_report via open-url.
 
 ## Web reports (Claude Artifacts + Codex local HTML)
 

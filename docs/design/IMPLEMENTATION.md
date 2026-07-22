@@ -52,6 +52,35 @@ implemented on digest-card and evidence z badges, including value bands and
 conditional baseline caveats.
 - [x] Source-provided post summaries are ingested without fabrication and shown
 through shared headline tooltips plus expandable evidence-row attribution.
+- [x] Mix channels can be removed without muting: the shared close affordance
+clears the stored stance, removes the row, and lets trending topics resurface.
+- [x] The scoring methodology is exposed through shared info tooltips and
+desktop disclosure panels whose formula and live-budget copy are Rust-owned.
+- [x] The clarity pass is implemented: shared bucket-hover tooltips and chart
+context labels explain the 12-hour series, scorer-owned worked examples expose
+each selected card's arithmetic, the mention stat defines its unit, and matched
+aliases are required evidence-row provenance.
+- [x] Desktop titlebar controls are vertically centered, including when i3 adds
+its own tab decoration above the application window.
+- [x] Source normalization is implemented: rolling seven-day source volumes
+produce clamped weights shared by velocity, z inputs, and z baselines; raw post
+counts stay unweighted in the UI; vote comparisons use within-source
+percentiles; and the methodology panel renders the scorer's live weights.
+- [x] Mentions tooltips include mixed-source bucket totals and source-prefixed
+post titles; single-source buckets omit the redundant breakdown.
+- [x] Desktop Mix channels use segmented `− / + / ++` interest controls with a
+visible upper-right `×` for the zero/remove action; fractional weights render at
+their nearest state and snap on the first tap, while attention budget stays a fader.
+
+### Desktop titlebar alignment (operator request)
+
+The faux desktop chrome must match the approved mockup instead of appearing
+pressed against the top edge under i3. Its traffic-light controls, title,
+theme toggle, and live badge are centered on the titlebar's vertical axis.
+
+Acceptance: launch the desktop app in an i3 tabbed container; the full native
+i3 decoration remains visible above the app, and every control in the app's
+39px titlebar has balanced space above and below it.
 
 ## P0 — correctness (do these first)
 
@@ -487,6 +516,14 @@ nothing — and we NEVER fabricate: no text → no affordance.
 
 ## Remove channels from The Mix (operator request)
 
+**Status: implemented.** Desktop and mobile channel rows call the existing
+`set_interest(topic, 0.0)` path from the shared close affordance. The M control
+uses a distinct mute transition so toggling it off persists a tracked neutral
+row instead of invoking removal. Desktop hover copy preserves the
+remove-versus-mute distinction verbatim; the mix may be empty, and tests cover
+row removal, persistence removal, neutral digest stability, suggested
+resurfacing, mute exclusion, and unmute-to-neutral retention.
+
 Suggested chips can ADD a channel but nothing can remove one — the mix
 only grows. Fix with explicit removal, and make the semantics honest:
 
@@ -514,6 +551,224 @@ only grows. Fix with explicit removal, and make the semantics honest:
    digest unchanged for a neutral topic (affinity 1.0 before and
    after); removed-then-trending topic reappears in suggested; mute ≠
    remove covered explicitly.
+
+## Methodology explainer — scoring + categorization (operator request)
+
+**Status: implemented.** Shared ⓘ controls sit beside the desktop and mobile
+pulse headings and evidence formulas. Desktop clicks open the four-stage
+disclosure; mobile stays tooltip-only. Scoring constants and every explainer
+string share `engine.rs`, with a no-drift unit test and a live surface-budget
+value. Required per-post categorization transparency records the most-specific
+alias and exposes it in evidence-row tooltips.
+
+Users (and interview panelists) should be able to ask the UI "how are
+these ranked and why is this post in this topic?" and get the real
+answer. Two levels, reusing existing primitives:
+
+1. **Tooltip level**: an ⓘ info icon (shared SVG family) beside the
+   "TODAY'S PULSE" header and beside the evidence panel's rank-formula
+   caption. Hover (shared tooltip primitive): the one-liner —
+   `"rank = trend × interest · trend = velocity × (1 + z⁺/4) +
+   sources/2 · capped at your budget"`.
+2. **Expandable "Methodology" section**: clicking the ⓘ opens a
+   disclosure panel (same chevron/expand grammar) explaining the
+   pipeline in four steps, plain language:
+   - **Ingest** — HN, Lobsters, Product Hunt, normalized; politeness
+     floor between fetches.
+   - **Categorize** — curated alias lists matched against title + tags
+     (e.g. "wasmtime" → wasm-runtimes); a post can belong to several
+     topics; posts matching nothing get keyword-derived topics. State
+     the limitation honestly: keyword matching, no ML — misclassification
+     is possible and visible (the aliases are inspectable).
+   - **Score** — velocity (1h/6h/24h weighted), z vs the topic's own
+     7-day baseline (σ floored at 1.0), source-diversity term, then ×
+     your interest weight.
+   - **Surface** — ranked, capped at YOUR attention budget (show the
+     live value, not a hardcoded "5").
+3. **No drift**: generate the explainer strings in Rust adjacent to the
+   actual constants/formula (one module owns both), so the text can
+   never disagree with the code. Unit test: the formula string contains
+   the same constants the scorer uses.
+4. **Required categorization transparency**: record the matched alias at
+extraction and surface it in the evidence row tooltip ("in wasm-runtimes:
+matched 'wasmtime'"). This requirement supersedes the original optional
+stretch framing.
+5. Mobile: tooltip level only for now (expandable section deferred with
+   parity).
+
+## Clarity pass: chart tooltips + worked-example scoring (operator request)
+
+Operators are fielding methodology questions the product should answer
+itself. Five items, in value order:
+
+**Status: implemented.** Desktop charts use the shared delayed tooltip with
+mouse-x bucket selection, raw-count/time context, point highlighting, and
+post links in the evidence view. The selected card's scorer-owned arithmetic
+expands beside the formula and is recompute-tested; mention and matched-alias
+definitions are surfaced where users encounter those values.
+
+1. **Chart hover tooltips (sparklines + evidence chart)**: hovering a
+   chart shows, for the bucket under the cursor: the bucket's time range
+   (local time), `"N mentions"`, and up to 2 post titles from that
+   bucket (tap-through opens the post). Highlight the hovered point
+   (dot + faint vertical rule). Card sparklines can show the compact
+   form (time + count only); the evidence chart shows the full form
+   with post titles. Implementation: bucket index from mouse-x over the
+   chart's TouchArea; per-bucket post titles need `hourly_series` to
+   optionally return post ids per bucket (or a second query on hover —
+   it's SQLite-local, fine). Desktop only.
+2. **Charts get context labels**: a small caption row under each chart —
+   `"hourly mentions · last 12h"` on the evidence chart, and first/last
+   bucket time labels at the chart's edges. An unlabeled axis is the #1
+   source of "what am I looking at?" questions.
+3. **Worked-example rank breakdown**: the evidence panel's formula
+   caption becomes expandable (shared disclosure grammar) into THIS
+   card's actual numbers, e.g.:
+   `rank 42.1 = trend 38.3 × interest 1.10` and
+   `trend 38.3 = velocity 12.4 × (1 + 1.9/4) + sources 1.5`.
+   Values come from the engine's existing per-card fields; format in
+   Rust beside the scorer (same no-drift rule as the methodology
+   explainer — one module, unit test that the breakdown recomputes to
+   the displayed rank). This is the definitive answer to "why is this
+   card #1?".
+4. **Define "mention" where it's shown**: tooltip on the `MENTIONS / 6H`
+   stat label: `"a mention = one post categorized into this topic in
+   the window; comments and votes are engagement, not mentions"`.
+5. **Promote matched-alias transparency from optional to required**
+   (supersedes the stretch note in § Methodology explainer): store the
+   matched alias per post-topic edge and show it in the evidence-row
+   tooltip ("in privacy: matched 'no-upload'"). This is the standing
+   answer to "why is this post in this topic?".
+
+Tests: bucket-index math at chart edges; breakdown string recomputes to
+rank (pure fn); mention tooltip present; alias stored + surfaced.
+
+**Addendum (operator request): visual equation breakdown.** Upgrade the
+worked-example text into a **visual factor flow** in the expanded
+evidence panel — the equation rendered as value chips connected by
+operator glyphs, using THIS card's numbers:
+
+```
+[velocity 12.4] ×[surprise ×1.47] = 18.2  +[sources +1.5] = [trend 19.7]
+   ×[interest ×1.65] → [RANK 32.5]
+```
+
+- Each chip: mono value on top, tiny ink-3 label beneath (velocity /
+  surprise (z⁺/4) / sources / trend / interest / rank); operators as
+  glyphs between chips. The interest chip wears the channel color; the
+  final rank chip wears the accent (and matches the card's displayed
+  score exactly).
+- Optional second row: a proportion bar showing each factor's
+  contribution to trend (velocity-driven vs surprise-amplification vs
+  diversity) — only if cheap; the chip flow is the requirement.
+- Values come from the same scorer-owned worked-example data (no-drift:
+  the chips must recompute to the displayed rank — extend the existing
+  test).
+- Layout wraps at operator boundaries on narrow panes; never a
+  horizontal scrollbar.
+- Hovering a chip reuses the shared tooltip with that factor's
+  one-line definition (same strings as the methodology explainer).
+
+**Addendum (operator request): show sources in the mentions tooltip.**
+The bucket-hover tooltip gains source attribution at two levels:
+- a per-bucket summary line under the count: `"8 mentions — 6 HN ·
+  2 Lobsters"` (omit zero-count sources);
+- each post title line prefixed with its source in ink-3 mono
+  (`"HN · <title>"`), matching the evidence-row convention.
+Once source normalization lands, when weights ≠ 1 the summary line may
+append the weighted value where the chart plots weighted mentions —
+same raw-vs-weighted labeling rule as everywhere else. Test: bucket
+with mixed sources renders the breakdown; single-source bucket omits
+the redundant summary.
+
+## Source normalization for mentions + votes (operator request)
+
+HN's raw volume dwarfs Lobsters/PH, so uniform mention counting lets
+HN-native topics outscore equally-significant Lobsters-native ones, and
+raw points are incomparable across sources. Normalize both — with the
+same legibility rules as the rest of the formula.
+
+1. **Mention weights, computed not hardcoded**: per source s,
+   `weight_s = clamp(global_avg_daily_posts / source_avg_daily_posts,
+   0.25, 4.0)` over a rolling 7-day window from the posts table itself —
+   data-derived, adapts as sources grow, no magic constants. A weighted
+   mention = 1 × weight_s.
+2. **Apply consistently or z breaks**: weighted counts feed velocity AND
+   the 27-bucket baseline AND mentions_6h in the z numerator — mixing
+   weighted current vs unweighted baseline would corrupt z. `hourly_series`
+   gains a weighted variant for scoring; charts may show raw counts but
+   must then be labeled "posts" not "weighted mentions".
+3. **Votes: source-relative percentile, not raw comparison**: points
+   stay OUT of the rank formula (unchanged), but wherever points imply
+   comparison (headline pick tie-breaks, evidence row prominence),
+   use the post's percentile within its own source's last-7-days points
+   distribution. Display keeps raw points WITH source ("486↑ on HN");
+   the percentile may appear in tooltips ("top 3% for Lobsters").
+4. **Transparency (no-drift rule)**: the methodology explainer shows the
+   live computed weights ("this week: HN ×0.4 · Lobsters ×1.8 · PH
+   ×2.1") from the same module that applies them; unit test that
+   explainer weights == scoring weights. The worked-example rank
+   breakdown includes the weighting step.
+5. **Display honesty**: stat rows showing raw counts (MENTIONS / 6H)
+   keep raw counts — never show a weighted number where a count is
+   implied. Weighted values appear only where labeled as such.
+6. **Fixture**: seed volumes so the weights are visibly ≠1 in demo
+   (HN-heavy fixture already implies this); snapshot tests on weight
+   computation with a fixed corpus.
+7. **Tests**: weight clamp bounds; weighted-consistency (z with all
+   weights=1 equals old z); a Lobsters-native topic with equal
+   per-capita activity ranks ≈ equal to an HN-native one on the fixture.
+
+## Interest buttons instead of sliders (operator request)
+
+Replace the per-channel fader with a **discrete segmented control** —
+simpler to read, tap, and communicate ("privacy ++" beats "privacy
+0.85"). The mixer identity survives in the channel strips, colors, and
+the master budget fader (which stays a fader — it selects a count, a
+genuinely continuous choice).
+
+1. **Four states, fixed weights**: `−` mute (−1.0) · `0` neutral (0.0)
+   · `+` boost (+1.0) · `++` strong (+2.0). Exactly the existing weight
+   domain's landmarks — engine, tools, and chat vocabulary unchanged
+   (set_interests already speaks these values). The separate M button
+   merges into the `−` segment; the ✕ remove affordance is unchanged.
+2. **UI**: a 4-segment control per channel (shared icon-button family,
+   ≥24px per segment, active segment filled with the channel color;
+   muted state keeps the dimmed-channel treatment). The weight readout
+   shows the state glyph, not a decimal.
+3. **Migration**: existing fractional weights display as the nearest
+   state and snap to it on first tap (persisting the snapped value);
+   until tapped, the stored value is untouched. Agent/chat writes of
+   arbitrary weights remain legal — the control shows nearest state,
+   tooltip shows the exact value when they differ.
+4. **Ripple effects**: mockups keep faders (design docs note the swap);
+   perspective ranking and mix sharing get simpler to display
+   ("Alice: privacy ++"). Update the methodology explainer's interest
+   line to name the four states.
+5. **Tests**: state↔weight mapping; snap-on-first-tap persistence;
+   mute-via-segment equals old M semantics (affinity 0, digest
+   exclusion); nearest-state display for fractional agent-set weights.
+
+## Typed attention-budget input (operator request)
+
+The master fader stays; add direct numeric entry for the budget value:
+
+1. **Interaction**: clicking the budget readout number turns it into a
+   small borderless `TextInput` (mono, same size/position — no layout
+   shift), pre-filled and selected. Enter commits; Esc or focus-loss
+   cancels back to the previous value.
+2. **Validation**: parse integer; clamp to the fader's 3–10 range (same
+   clamp path as every other budget write — engine remains the final
+   authority). Non-numeric input reverts silently with a brief ink-3
+   hint ("3–10") shown beside the readout for ~2s.
+3. **Propagation is free**: commit goes through the existing budget
+   setter, so the fader thumb, meter segments, status line, and digest
+   re-rank react like any other budget change — and MCP/chat writes
+   still round-trip into the field like they do the fader.
+4. Mobile: deferred with parity (the phone frame keeps fader-only).
+5. **Tests**: commit/cancel/Esc semantics; clamp (typing 50 → 10,
+   0 → 3); non-numeric revert; readout↔fader consistency after a typed
+   commit.
 
 ## Explicit non-goals (don't spend time here)
 

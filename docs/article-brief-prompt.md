@@ -24,8 +24,9 @@ Call `submit_research` exactly once with:
 - A useful title and the complete markdown brief.
 - `citations` containing every exact article, thread, and comment URL used by the brief.
 - A summary of at most 140 characters.
-- Structured `sections` in addition to markdown, always. Use the canonical kinds `what`, `substance`, `reaction`, `credibility`, and `watch`; include a body for each applicable section.
+- Structured `sections` in addition to markdown, always. Use the canonical kinds `what`, `substance`, `reaction`, `credibility`, and `watch`; include a body for each applicable section. When a section includes a chart, submit its numbers as `series: { label, points, baseline? }`, not a chart screenshot.
 - Quotes only when they add evidence. Each structured quote must include its exact source URL, contain at most 280 characters, and appear in the section it supports. Include at most three quotes per section. Every quote URL must also be present in `citations`.
-- `web_report` when available: publish a Claude artifact and submit its URL. If artifact publishing is unavailable—or when running Codex—write self-contained HTML under `research/reports/` and submit its absolute path or `file://` URL. Never fabricate a report location.
+- Optional section images only when they add evidence. Save them below `research/reports/assets/` and submit `images: [{ path, caption }]`; never submit remote image URLs.
+- Always produce a self-contained `web_report`: Claude publishes a private Artifact and submits its URL; Codex writes self-contained HTML under `research/reports/` and submits its absolute path. Never fabricate a report location.
 
 The markdown is the compatibility fallback and must remain complete even when structured `sections` are supplied. This is a user-initiated brief for one evidence item; do not batch other articles, alter ranking, or submit topic-level enrichment as part of this run.

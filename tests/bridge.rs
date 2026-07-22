@@ -1,7 +1,8 @@
 use chrono::{TimeZone, Utc};
 use community_pulse::chat::{ChatEvent, ChatSession};
 use community_pulse::domain::{
-    Citation, ResearchEnrichment, ResearchQuote, ResearchSection, ResearchSubmission,
+    Citation, ResearchEnrichment, ResearchQuote, ResearchSection, ResearchSectionSeries,
+    ResearchSubmission,
 };
 use community_pulse::{PulseEngine, ToolBridge};
 
@@ -85,7 +86,7 @@ async fn replay_chat_can_set_the_user_owned_attention_budget() {
 }
 
 #[test]
-fn direct_fader_weights_snap_to_neutral_and_clamp_to_the_real_domain() {
+fn direct_interest_weights_snap_to_neutral_and_clamp_to_the_real_domain() {
     let bridge = fixture_bridge();
 
     bridge.set_interest("rust", 0.04).unwrap();
@@ -96,6 +97,30 @@ fn direct_fader_weights_snap_to_neutral_and_clamp_to_the_real_domain() {
 
     bridge.set_interest("rust", -3.0).unwrap();
     assert_eq!(bridge.snapshot().interests.weight("rust"), -1.0);
+}
+
+#[test]
+fn removing_a_neutral_interest_preserves_the_digest_but_muting_excludes_it() {
+    let bridge = fixture_bridge();
+    bridge.get_pulse(Some(5)).unwrap();
+    let neutral_digest = bridge.snapshot().digest;
+
+    bridge.set_interest("rust", 1.0).unwrap();
+    bridge.set_interest("rust", 0.0).unwrap();
+    let removed = bridge.snapshot();
+    assert!(!removed.interests.0.contains_key("rust"));
+    assert_eq!(removed.digest, neutral_digest);
+
+    bridge.set_interest("rust", -1.0).unwrap();
+    let muted = bridge.snapshot();
+    assert_eq!(muted.interests.weight("rust"), -1.0);
+    assert!(muted.digest.iter().all(|card| card.id != "rust"));
+
+    bridge.set_muted("rust", false).unwrap();
+    let unmuted = bridge.snapshot();
+    assert!(unmuted.interests.0.contains_key("rust"));
+    assert_eq!(unmuted.interests.weight("rust"), 0.0);
+    assert_eq!(unmuted.digest, neutral_digest);
 }
 
 #[test]
@@ -316,7 +341,7 @@ fn article_briefs_match_evidence_round_trip_sections_and_never_rerank() {
             title: "Article brief".to_owned(),
             markdown: "## What it is\n\nA complete markdown fallback.".to_owned(),
             citations,
-            web_report: None,
+            web_report: Some("https://claude.ai/artifacts/article-brief".to_owned()),
             article_url: Some(article_url.clone()),
             sections: vec![ResearchSection {
                 kind: "reaction".to_owned(),
@@ -326,6 +351,12 @@ fn article_briefs_match_evidence_round_trip_sections_and_never_rerank() {
                     url: quote_url,
                     author: Some("community member".to_owned()),
                 }],
+                series: Some(ResearchSectionSeries {
+                    label: "mentions".to_owned(),
+                    points: vec![2.0, 5.0, 8.0],
+                    baseline: Some(3.0),
+                }),
+                images: vec![],
             }],
             enrichment: ResearchEnrichment {
                 verdict: Some("manufactured".to_owned()),
@@ -344,6 +375,13 @@ fn article_briefs_match_evidence_round_trip_sections_and_never_rerank() {
             .unwrap()
             .len(),
         1
+    );
+    assert_eq!(
+        submitted["report"]["sections"][0]["series"]["points"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
     );
     assert_eq!(
         bridge
@@ -398,6 +436,8 @@ fn article_quote_urls_must_be_exact_citations() {
                     url: "https://example.com/comment/1".to_owned(),
                     author: None,
                 }],
+                series: None,
+                images: vec![],
             }],
             enrichment: ResearchEnrichment::default(),
         })

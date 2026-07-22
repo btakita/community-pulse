@@ -1,3 +1,12 @@
+export struct ChartBucketRow {
+    tooltip: string,
+    url: string,
+    point-x: float,
+    point-y: float,
+    start-label: string,
+    end-label: string,
+}
+
 export struct DigestRow {
     id: string,
     topic: string,
@@ -13,6 +22,7 @@ export struct DigestRow {
     spark-area: string,
     spark-end-x: float,
     spark-end-y: float,
+    chart-buckets: [ChartBucketRow],
     research-count: int,
     research-id: int,
     research-agent: string,
@@ -24,6 +34,7 @@ export struct TopicRow {
     id: string,
     topic: string,
     weight: string,
+    weight-tooltip: string,
     state: string,
     weight-value: float,
     active: bool,
@@ -45,6 +56,7 @@ export struct EvidencePostRow {
     detail: string,
     summary: string,
     summary-tooltip: string,
+    match-tooltip: string,
     claude-brief-id: int,
     codex-brief-id: int,
 }
@@ -57,6 +69,7 @@ export struct EvidenceRow {
     baseline: string,
     z-score: string,
     z-tooltip: string,
+    mention-tooltip: string,
     first-seen: string,
     source-count: string,
     spark-line: string,
@@ -64,6 +77,9 @@ export struct EvidenceRow {
     spark-end-x: float,
     spark-end-y: float,
     baseline-y: float,
+    chart-buckets: [ChartBucketRow],
+    rank-line: string,
+    trend-line: string,
 }
 
 export struct ResearchTitleRow {
@@ -86,11 +102,25 @@ export struct ResearchQuoteRow {
     author: string,
 }
 
+export struct ResearchImageRow {
+    source: image,
+    caption: string,
+}
+
 export struct ResearchSectionRow {
     kind: string,
     heading: string,
     body: styled-text,
     quotes: [ResearchQuoteRow],
+    series-label: string,
+    series-point-count: int,
+    series-line: string,
+    series-area: string,
+    series-end-x: float,
+    series-end-y: float,
+    series-baseline-y: float,
+    series-buckets: [ChartBucketRow],
+    images: [ResearchImageRow],
 }
 
 export struct ReportBlockRow {

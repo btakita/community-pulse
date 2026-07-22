@@ -12,9 +12,15 @@ Research `{{topic}}` using the pulse MCP endpoint at
    - `summary`: one card-ready sentence of at most 140 characters.
    - `watch`: up to three topic slugs worth watching next.
    Keep the markdown report under 400 words.
-5. When possible, also produce a self-contained web report. Claude may use a
-   private `https://claude.ai/...` Artifact URL. Codex writes HTML below
-   `research/reports/` and submits its absolute path as `web_report`.
+5. Always produce a self-contained web report before calling `submit_research`.
+   Claude publishes a private `https://claude.ai/...` Artifact and submits its
+   URL as `web_report`. Codex writes HTML below `research/reports/` and submits
+   its absolute path as `web_report`.
+6. When a structured section includes a chart, pass the charted numbers through
+   `series: { label, points, baseline? }`; `get_series` output can be used
+   directly. Do not submit a chart screenshot. Optional figures must be saved
+   below `research/reports/assets/` and submitted as
+   `images: [{ path, caption }]`.
 
-Do not publish anything automatically. The report is local, agent-attributed
-research for the user to review.
+Do not make the report public. It remains private, agent-attributed research for
+the user to review.

@@ -1,5 +1,59 @@
 import { Tokens } from "theme.slint";
 
+export component HoverTooltip inherits Rectangle {
+    in property <string> text;
+    in property <bool> align-right: false;
+    in property <bool> clickable: false;
+    in property <length> anchor-x: -1px;
+    out property <bool> hovered: hover.has-hover;
+    out property <length> mouse-x: hover.mouse-x;
+    callback clicked();
+    private property <bool> ready: false;
+
+    background: transparent;
+    clip: false;
+
+    Timer {
+        interval: 350ms;
+        running: hover.has-hover && root.text != "" && !root.ready;
+        triggered => { root.ready = true; }
+    }
+
+    if root.ready && hover.has-hover: tooltip := Rectangle {
+        x: root.anchor-x >= 0px
+            ? max(0px, min(root.width - self.width, root.anchor-x - self.width / 2))
+            : (root.align-right ? root.width - self.width : 0px);
+        y: -self.height - 7px;
+        width: min(280px, max(150px, tooltip-text.preferred-width + 18px));
+        height: tooltip-text.preferred-height + 16px;
+        z: 1000;
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: Tokens.line;
+        background: Tokens.raised;
+        tooltip-text := Text {
+            x: 9px;
+            y: 8px;
+            width: parent.width - 18px;
+            text: root.text;
+            color: Tokens.ink-2;
+            font-family: "JetBrains Mono";
+            font-size: 9px;
+            wrap: word-wrap;
+        }
+    }
+
+    hover := TouchArea {
+        mouse-cursor: root.clickable ? pointer : default;
+        clicked => { root.clicked(); }
+        changed has-hover => {
+            if (!self.has-hover) {
+                root.ready = false;
+            }
+        }
+    }
+}
+
 export component ChevronIconButton inherits Rectangle {
     in property <bool> open: false;
     in property <angle> rotation: 0deg;
@@ -79,6 +133,40 @@ export component CopyIconButton inherits Rectangle {
 
     touch := TouchArea {
         mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component InfoIconButton inherits Rectangle {
+    in property <string> tooltip;
+    in property <bool> open: false;
+    in property <bool> clickable: true;
+    in property <bool> align-right: false;
+    callback clicked();
+
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: root.open ? Tokens.accent : (info-hover.hovered ? Tokens.ink-3 : Tokens.line-strong);
+    background: info-hover.hovered ? (root.open ? Tokens.accent-soft : Tokens.raised) : Tokens.surface;
+
+    Image {
+        x: 6px;
+        y: 6px;
+        width: 12px;
+        height: 12px;
+        source: @image-url("icons/info.svg");
+        image-fit: contain;
+        colorize: root.open ? Tokens.accent : Tokens.ink-2;
+    }
+
+    info-hover := HoverTooltip {
+        width: parent.width;
+        height: parent.height;
+        text: root.tooltip;
+        clickable: root.clickable;
+        align-right: root.align-right;
         clicked => { root.clicked(); }
     }
 }

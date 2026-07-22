@@ -29,23 +29,32 @@ fn database_snapshot_restores_posts_and_user_budget() {
 }
 
 #[test]
-fn existing_databases_gain_the_post_summary_column() {
+fn existing_databases_gain_summary_and_topic_match_columns() {
     let directory = tempfile::tempdir().unwrap();
     let database = directory.path().join("legacy.db");
     let connection = Connection::open(&database).unwrap();
     connection
         .execute_batch(
             r#"
-            CREATE TABLE posts (
+CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
                 source TEXT NOT NULL,
                 title TEXT NOT NULL,
                 url TEXT NOT NULL,
                 author TEXT NOT NULL,
                 published_at INTEGER NOT NULL,
-                points INTEGER NOT NULL
-            );
-            "#,
+points INTEGER NOT NULL
+);
+CREATE TABLE topics (
+id TEXT PRIMARY KEY,
+display TEXT NOT NULL
+);
+CREATE TABLE post_topics (
+post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+PRIMARY KEY (post_id, topic_id)
+);
+"#,
         )
         .unwrap();
     drop(connection);
@@ -60,6 +69,16 @@ fn existing_databases_gain_the_post_summary_column() {
         .collect::<rusqlite::Result<Vec<_>>>()
         .unwrap();
     assert!(columns.iter().any(|column| column == "summary"));
+
+    let mut statement = connection
+        .prepare("PRAGMA table_info(post_topics)")
+        .unwrap();
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert!(columns.iter().any(|column| column == "matched_alias"));
 }
 
 #[test]
@@ -144,6 +163,22 @@ fn explanation_contains_velocity_baseline_sparkline_and_posts() {
     let evidence = engine.explain_trend("wasm-runtimes", now).unwrap();
 
     assert_eq!(evidence.sparkline.len(), 12);
+    assert_eq!(evidence.chart_buckets.len(), 12);
+    assert_eq!(
+        evidence.sparkline,
+        evidence
+            .chart_buckets
+            .iter()
+            .map(|bucket| bucket.mentions)
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        evidence
+            .chart_buckets
+            .iter()
+            .flat_map(|bucket| &bucket.posts)
+            .any(|post| !post.title.is_empty() && !post.url.is_empty())
+    );
     assert!(evidence.mentions_6h >= evidence.mentions_1h);
     assert!(evidence.mentions_24h >= evidence.mentions_6h);
     assert!(!evidence.posts.is_empty());
