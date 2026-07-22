@@ -51,7 +51,7 @@ xdotool mousemove --window "$window_id" 1315 788 click 1
 sleep 3
 xdotool mousemove --window "$window_id" 222 512 click 1
 sleep 2
-xdotool mousemove --window "$window_id" 974 211 click 1
+xdotool mousemove --window "$window_id" 974 228 click 1
 sleep 3
 xdotool windowfocus --sync "$window_id"
 xdotool mousemove --window "$window_id" 1280 836 click 1

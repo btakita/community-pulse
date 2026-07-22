@@ -13,7 +13,8 @@ pub struct PulseEngine {
     connection: Connection,
 }
 
-type HeadlineCandidates = (Vec<(String, String)>, Vec<String>);
+type HeadlineCandidate = (String, String, String);
+type HeadlineCandidates = Vec<HeadlineCandidate>;
 
 impl PulseEngine {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -275,12 +276,17 @@ impl PulseEngine {
         cards.sort_by(|left, right| right.score.total_cmp(&left.score));
         let mut used_posts = HashSet::new();
         for card in &mut cards {
-            let (candidates, sources) = self.headline_candidates(&card.id)?;
+            let candidates = self.headline_candidates(&card.id)?;
+            card.sources = candidates
+                .iter()
+                .map(|(_, _, source)| source.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
             card.headline = candidates
                 .into_iter()
-                .find_map(|(post_id, title)| used_posts.insert(post_id).then_some(title))
+                .find_map(|(post_id, title, _)| used_posts.insert(post_id).then_some(title))
                 .unwrap_or_else(|| format!("{} is gaining attention", card.topic));
-            card.sources = sources;
             card.sparkline = hourly_series(&self.connection, &card.id, now, 12)?;
         }
         cards.truncate(requested);
@@ -306,13 +312,11 @@ impl PulseEngine {
             ))
         })?;
         let mut candidates = Vec::new();
-        let mut sources = BTreeSet::new();
         for row in rows {
             let (post_id, title, source) = row?;
-            candidates.push((post_id, title));
-            sources.insert(source);
+            candidates.push((post_id, title, source));
         }
-        Ok((candidates, sources.into_iter().collect()))
+        Ok(candidates)
     }
 
     pub fn explain_trend(&self, topic: &str, now: DateTime<Utc>) -> Result<TrendEvidence> {

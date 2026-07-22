@@ -57,17 +57,25 @@ export struct ChatRow {
     tool: string,
 }
 
+export struct EvidencePostRow {
+    source: string,
+    title: string,
+    detail: string,
+}
+
 export struct EvidenceRow {
     topic: string,
-    velocity: string,
+    mentions: string,
+    baseline-value: string,
     baseline: string,
     z-score: string,
+    first-seen: string,
+    source-count: string,
     spark-line: string,
     spark-area: string,
     spark-end-x: float,
     spark-end-y: float,
     baseline-y: float,
-    posts: string,
 }
 
 component MonoLabel inherits Text {
@@ -208,7 +216,7 @@ component SparkChart inherits Rectangle {
         fit: fill;
         fill: transparent;
         stroke: root.tone;
-        stroke-width: large ? 2px : 1.7px;
+        stroke-width: 2px;
         stroke-line-cap: round;
         stroke-line-join: round;
         commands: root.line-path;
@@ -335,14 +343,51 @@ component TopicChannel inherits Rectangle {
     }
 }
 
+component EvidenceStat inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <bool> accent: false;
+
+    background: transparent;
+    Text {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: 12px;
+        text: root.label;
+        color: Tokens.ink-3;
+        font-family: "JetBrains Mono";
+        font-size: 8px;
+        font-weight: 600;
+        letter-spacing: 0.8px;
+    }
+    Text {
+        x: 0;
+        y: 14px;
+        width: parent.width;
+        height: 20px;
+        text: root.value;
+        color: root.accent ? Tokens.rise : Tokens.ink;
+        font-family: "JetBrains Mono";
+        font-size: 13px;
+        font-weight: 650;
+    }
+}
+
 component EvidencePanel inherits Rectangle {
     in property <EvidenceRow> data;
+    in property <[EvidencePostRow]> posts;
 
-    height: 280px;
-    border-radius: 9px;
-    background: Tokens.raised;
-    border-width: 1px;
-    border-color: Tokens.line;
+    height: 310px;
+    background: transparent;
+
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: 1px;
+        background: Tokens.line;
+    }
 
     VerticalLayout {
         padding: 13px;
@@ -361,8 +406,7 @@ component EvidencePanel inherits Rectangle {
 
         Rectangle {
             height: 72px;
-            background: Tokens.inset;
-            border-radius: 7px;
+            background: transparent;
             SparkChart {
                 x: 8px;
                 y: 7px;
@@ -387,28 +431,67 @@ component EvidencePanel inherits Rectangle {
         }
 
         HorizontalLayout {
-            spacing: 15px;
-            Text { text: data.velocity; color: Tokens.ink-2; font-family: "JetBrains Mono"; font-size: 9.5px; }
-            Text { text: data.baseline; color: Tokens.ink-3; font-family: "JetBrains Mono"; font-size: 9.5px; }
+            height: 36px;
+            spacing: 18px;
+            EvidenceStat { label: "MENTIONS / 6H"; value: data.mentions; horizontal-stretch: 1; }
+            EvidenceStat { label: "7-DAY BASELINE"; value: data.baseline-value; horizontal-stretch: 1; }
+            EvidenceStat { label: "Z-SCORE"; value: data.z-score; accent: true; horizontal-stretch: 1; }
+            EvidenceStat { label: "FIRST SEEN"; value: data.first-seen; horizontal-stretch: 1; }
+            EvidenceStat { label: "SOURCES"; value: data.source-count; horizontal-stretch: 1; }
+        }
+
+        Text {
+            text: data.baseline;
+            color: Tokens.ink-3;
+            font-family: "JetBrains Mono";
+            font-size: 8.5px;
+        }
+
+        VerticalLayout {
+            height: root.posts.length * 31px;
+            spacing: 0px;
+            for post in root.posts: Rectangle {
+                height: 31px;
+                background: Tokens.surface;
+                border-width: 1px;
+                border-color: Tokens.line;
+                Text {
+                    x: 9px;
+                    width: 72px;
+                    text: post.source;
+                    color: Tokens.ink-3;
+                    font-family: "JetBrains Mono";
+                    font-size: 8.5px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Text {
+                    x: 84px;
+                    width: parent.width - 166px;
+                    text: post.title;
+                    color: Tokens.ink-2;
+                    font-size: 10px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Text {
+                    x: parent.width - 76px;
+                    width: 67px;
+                    text: post.detail;
+                    color: Tokens.ink-3;
+                    font-family: "JetBrains Mono";
+                    font-size: 8px;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
         }
 
         Rectangle {
-            height: 50px;
+            height: 1px;
             border-radius: 7px;
-            background: Tokens.surface;
-            border-width: 1px;
-            border-color: Tokens.line;
-            Text {
-                x: 10px;
-                y: 7px;
-                width: parent.width - 20px;
-                height: parent.height - 14px;
-                text: data.posts;
-                color: Tokens.ink-2;
-                font-size: 10px;
-                wrap: word-wrap;
-                overflow: elide;
-            }
+            background: transparent;
         }
 
         Text {
@@ -423,6 +506,7 @@ component EvidencePanel inherits Rectangle {
 component DigestCard inherits Rectangle {
     in property <DigestRow> data;
     in property <EvidenceRow> evidence;
+    in property <[EvidencePostRow]> evidence-posts;
     in property <bool> selected: false;
     in property <int> rank: 1;
     in property <color> topic-color: data.id == "rust" ? Tokens.rust :
@@ -432,7 +516,7 @@ component DigestCard inherits Rectangle {
     callback explain();
     callback subscribe();
 
-    height: selected ? 388px : 84px;
+    height: selected ? 430px : 84px;
     border-radius: 12px;
     border-width: 1px;
     border-color: selected ? Tokens.accent : Tokens.line;
@@ -446,7 +530,7 @@ component DigestCard inherits Rectangle {
             spacing: 12px;
 
             Text {
-                text: rank;
+                text: rank < 10 ? "0" + rank : rank;
                 width: 20px;
                 color: Tokens.ink-3;
                 font-family: "JetBrains Mono";
@@ -459,27 +543,30 @@ component DigestCard inherits Rectangle {
                 spacing: 7px;
                 horizontal-stretch: 1;
 
+                Text {
+                    text: data.headline;
+                    color: Tokens.ink;
+                    font-size: 14.5px;
+                    font-weight: 650;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+
                 HorizontalLayout {
                     spacing: 8px;
                     Rectangle {
                         width: 8px;
                         height: 8px;
-                        y: 4px;
+                        y: 3px;
                         border-radius: 2px;
                         background: root.topic-color;
                     }
                     Text {
-                        text: data.headline;
-                        color: Tokens.ink;
-                        font-size: 14.5px;
-                        font-weight: 650;
-                        overflow: elide;
-                        horizontal-stretch: 1;
+                        text: data.id == "wasm-runtimes" ? "wasm" : data.id;
+                        color: Tokens.ink-2;
+                        font-family: "JetBrains Mono";
+                        font-size: 9.5px;
                     }
-                }
-
-                HorizontalLayout {
-                    spacing: 8px;
                     Text {
                         text: data.sources + "  ·  " + data.mentions;
                         color: Tokens.ink-3;
@@ -502,15 +589,15 @@ component DigestCard inherits Rectangle {
                     spacing: 4px;
                     SparkChart {
                         height: 34px;
-                        tone: root.topic-color;
+                        tone: Tokens.rise;
                         line-path: data.spark-line;
                         area-path: data.spark-area;
                         end-x: data.spark-end-x;
                         end-y: data.spark-end-y;
                     }
-                Text {
-                    text: data.delta;
-                    color: Tokens.ink-2;
+                    Text {
+                        text: data.delta;
+                        color: Tokens.rise;
                     font-family: "JetBrains Mono";
                     font-size: 9.5px;
                     font-weight: 700;
@@ -521,6 +608,7 @@ component DigestCard inherits Rectangle {
 
         if selected: EvidencePanel {
             data: root.evidence;
+            posts: root.evidence-posts;
         }
     }
 }
@@ -528,10 +616,11 @@ component DigestCard inherits Rectangle {
 component ChatMessage inherits Rectangle {
     in property <ChatRow> data;
 
-    height: data.role == "TOOL" ? 45px : message-text.preferred-height + 20px;
+    height: content.preferred-height;
     background: transparent;
 
-    VerticalLayout {
+    content := VerticalLayout {
+        width: parent.width;
         spacing: 5px;
         MonoLabel {
             text: data.role;
@@ -581,6 +670,7 @@ export component AppWindow inherits Window {
     in-out property <[string]> suggested-prompts;
     in-out property <[string]> suggested-topics;
     in-out property <EvidenceRow> evidence;
+    in-out property <[EvidencePostRow]> evidence-posts;
     in-out property <bool> has-evidence: false;
     in-out property <bool> busy: false;
     in-out property <string> status: "";
@@ -870,9 +960,10 @@ export component AppWindow inherits Window {
                         VerticalLayout {
                             spacing: 10px;
                             for card[index] in root.digest: DigestCard {
-                                data: card;
-                                rank: index + 1;
-                                evidence: root.evidence;
+                            data: card;
+                            rank: index + 1;
+                            evidence: root.evidence;
+                            evidence-posts: root.evidence-posts;
                                 selected: root.has-evidence && root.evidence.topic == card.topic;
                                 explain => { root.explain-requested(card.id); }
                                 subscribe => { root.subscribe-requested(card.id); }

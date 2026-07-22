@@ -52,3 +52,17 @@ async fn replay_chat_calls_the_real_bridge_and_streams_narration() {
     assert_eq!(bridge.snapshot().interests.weight("rust"), 1.0);
     assert_eq!(bridge.snapshot().interests.weight("crypto"), -1.0);
 }
+
+#[test]
+fn direct_fader_weights_snap_to_neutral_and_clamp_to_the_real_domain() {
+    let bridge = fixture_bridge();
+
+    bridge.set_interest("rust", 0.04).unwrap();
+    assert_eq!(bridge.snapshot().interests.weight("rust"), 0.0);
+
+    bridge.set_interest("rust", 4.0).unwrap();
+    assert_eq!(bridge.snapshot().interests.weight("rust"), 2.0);
+
+    bridge.set_interest("rust", -3.0).unwrap();
+    assert_eq!(bridge.snapshot().interests.weight("rust"), -1.0);
+}

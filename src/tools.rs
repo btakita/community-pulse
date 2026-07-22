@@ -75,6 +75,7 @@ impl ToolBridge {
 
     pub fn set_interest(&self, topic: &str, weight: f64) -> Result<Value> {
         let topic = canonical_topic(topic);
+        let weight = normalize_interest_weight(weight);
         let mut interests = self.state.interests();
         interests.set(&topic, weight);
         let engine = self.engine.lock().expect("pulse engine lock poisoned");
@@ -180,6 +181,11 @@ impl ToolBridge {
             }),
         ]
     }
+}
+
+fn normalize_interest_weight(weight: f64) -> f64 {
+    let weight = weight.clamp(-1.0, 2.0);
+    if weight.abs() < 0.05 { 0.0 } else { weight }
 }
 
 fn parse_arguments<'a, T: Deserialize<'a>>(arguments: &'a str) -> Result<T> {

@@ -180,7 +180,12 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
                 headline: card.headline.into(),
                 sources: card.sources.join(" + ").into(),
                 score: format!("{:.1}", card.score).into(),
-                delta: format!("{:+.1}σ", card.z_score).into(),
+                delta: if card.z_score >= 0.0 {
+                    format!("z {:+.1} ▲", card.z_score)
+                } else {
+                    format!("z {:+.1} ▼", card.z_score)
+                }
+                .into(),
                 mentions: format!(
                     "{} now · {} / 6h · {} / 24h",
                     card.mentions_1h, card.mentions_6h, card.mentions_24h
@@ -195,7 +200,7 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
         .collect();
     window.set_digest(model(digest));
 
-    let topics = topic_rows(&snapshot.interests, &snapshot.suggested_topics);
+    let topics = topic_rows(&snapshot.interests);
     let mixer_topics = topics
         .iter()
         .map(|topic| topic.id.to_string())
@@ -251,14 +256,36 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
 
     if let Some(evidence) = snapshot.evidence {
         let chart = spark_geometry(&evidence.sparkline, Some(evidence.baseline_mean));
+        let first_seen = evidence
+            .posts
+            .iter()
+            .map(|post| post.published_at)
+            .min()
+            .map(|timestamp| timestamp.format("%H:%M").to_string())
+            .unwrap_or_else(|| "—".to_owned());
+        let source_count = evidence
+            .posts
+            .iter()
+            .map(|post| post.source.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        window.set_evidence_posts(model(
+            evidence
+                .posts
+                .iter()
+                .take(3)
+                .map(|post| EvidencePostRow {
+                    source: post.source.clone().into(),
+                    title: post.title.clone().into(),
+                    detail: post.published_at.format("%H:%M UTC").to_string().into(),
+                })
+                .collect(),
+        ));
         window.set_has_evidence(true);
         window.set_evidence(EvidenceRow {
             topic: evidence.topic.into(),
-            velocity: format!(
-                "velocity {} / 1h · {} / 6h · {} / 24h",
-                evidence.mentions_1h, evidence.mentions_6h, evidence.mentions_24h
-            )
-            .into(),
+            mentions: evidence.mentions_6h.to_string().into(),
+            baseline_value: format!("{:.1}", evidence.baseline_mean).into(),
             baseline: if evidence.baseline_stddev < 1.0 {
                 format!(
                     "baseline μ {:.1} · σ {:.1} · z floors σ at 1.0",
@@ -271,26 +298,22 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
                 )
             }
             .into(),
-            z_score: format!("z = {:+.2}", evidence.z_score).into(),
+            z_score: format!("{:+.1}σ", evidence.z_score).into(),
+            first_seen: first_seen.into(),
+            source_count: source_count.to_string().into(),
             spark_line: chart.line.into(),
             spark_area: chart.area.into(),
             spark_end_x: chart.end_x,
             spark_end_y: chart.end_y,
             baseline_y: chart.baseline_y,
-            posts: evidence
-                .posts
-                .iter()
-                .map(|post| format!("{}: {}", post.source, post.title))
-                .collect::<Vec<_>>()
-                .join("  ·  ")
-                .into(),
         });
     } else {
         window.set_has_evidence(false);
+        window.set_evidence_posts(model(Vec::new()));
     }
 }
 
-fn topic_rows(interests: &InterestModel, _suggested: &[String]) -> Vec<TopicRow> {
+fn topic_rows(interests: &InterestModel) -> Vec<TopicRow> {
     let mut topics = ["rust", "local-first", "ai-infra", "wasm-runtimes", "crypto"]
         .into_iter()
         .map(str::to_owned)
@@ -404,14 +427,8 @@ fn spark_geometry(points: &[usize], baseline: Option<f64>) -> SparkGeometry {
 }
 
 fn compact_result(value: &serde_json::Value) -> String {
-    if value.get("error").and_then(serde_json::Value::as_bool) == Some(true) {
-        return format!(
-            "tool failed: {}",
-            value
-                .get("message")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("unknown error")
-        );
+    if let Some(error) = value.get("error").and_then(serde_json::Value::as_str) {
+        return format!("tool failed: {error}");
     }
     if let Some(count) = value.get("count").and_then(serde_json::Value::as_u64) {
         return format!("updated {count} digest cards");
@@ -427,4 +444,18 @@ fn compact_result(value: &serde_json::Value) -> String {
 
 fn model<T: Clone + 'static>(values: Vec<T>) -> ModelRc<T> {
     ModelRc::new(VecModel::from(values))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compact_result;
+    use serde_json::json;
+
+    #[test]
+    fn compact_tool_errors_keep_the_failure_visible() {
+        assert_eq!(
+            compact_result(&json!({ "error": "unknown trend: nope" })),
+            "tool failed: unknown trend: nope"
+        );
+    }
 }

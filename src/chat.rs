@@ -163,10 +163,7 @@ impl ChatSession {
             for call in turn.tool_calls {
                 let result = match self.bridge.call(&call.name, &call.arguments) {
                     Ok(result) => result,
-                    Err(error) => json!({
-                        "error": true,
-                        "message": format!("{error:#}"),
-                    }),
+                    Err(error) => json!({ "error": format!("{error:#}") }),
                 };
                 emit(ChatEvent::ToolCall {
                     name: call.name.clone(),

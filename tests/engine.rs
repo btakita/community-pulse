@@ -22,6 +22,11 @@ fn fixture_produces_a_ranked_five_card_digest() {
     assert!(cards.windows(2).all(|pair| pair[0].score >= pair[1].score));
     assert!(cards.iter().all(|card| !card.sources.is_empty()));
     assert!(cards.iter().all(|card| card.sparkline.len() == 12));
+    let sparklines = cards
+        .iter()
+        .map(|card| card.sparkline.clone())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(sparklines.len(), cards.len());
     let headlines = cards
         .iter()
         .map(|card| card.headline.as_str())
