@@ -384,6 +384,7 @@ component MobileAttentionBudgetMaster inherits Rectangle {
 
 component MobileChatMessage inherits Rectangle {
     in property <ChatRow> data;
+    callback open-url(string);
     height: content.preferred-height;
     background: transparent;
 
@@ -400,24 +401,65 @@ component MobileChatMessage inherits Rectangle {
             background: Tokens.accent-soft;
             border-radius: 4px;
             Rectangle { x: 0; width: 3px; height: parent.height; background: Tokens.accent; }
-            Text {
+            TextInput {
                 x: 10px;
                 width: parent.width - 18px;
+                height: parent.height;
                 text: "↳ " + data.tool + " · " + data.body;
                 color: Tokens.accent;
                 font-family: "JetBrains Mono";
                 font-size: 8.5px;
-                overflow: elide;
                 vertical-alignment: center;
+                read-only: true;
+                single-line: true;
+                selection-background-color: Tokens.accent;
+                selection-foreground-color: Tokens.surface;
             }
         }
-        Text {
+        message-body := Rectangle {
             visible: data.role != "TOOL";
             width: root.width;
-            text: data.body;
-            color: Tokens.ink-2;
-            font-size: 12px;
-            wrap: word-wrap;
+            height: max(18px, body-measure.preferred-height);
+            body-measure := Text {
+                width: parent.width;
+                text: data.body;
+                color: transparent;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+            TextInput {
+                width: parent.width;
+                height: parent.height;
+                text: data.body;
+                color: Tokens.ink-2;
+                font-size: 12px;
+                read-only: true;
+                single-line: false;
+                wrap: word-wrap;
+                selection-background-color: Tokens.accent;
+                selection-foreground-color: Tokens.surface;
+            }
+        }
+        if data.artifact-path != "": Rectangle {
+            width: data.artifact-label == "open report ↗" ? 95px : 78px;
+            height: 23px;
+            border-radius: 11px;
+            border-width: 1px;
+            border-color: artifact-touch.has-hover ? Tokens.accent : Tokens.line-strong;
+            background: artifact-touch.has-hover ? Tokens.accent-soft : Tokens.surface;
+            Text {
+                text: data.artifact-label;
+                color: Tokens.accent;
+                font-family: "JetBrains Mono";
+                font-size: 7.5px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            artifact-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.open-url(data.artifact-path); }
+            }
         }
     }
 }
@@ -910,6 +952,7 @@ export component MobileWindow inherits Window {
                         for message in root.chat: MobileChatMessage {
                             width: agent-list.width;
                             data: message;
+                            open-url(url) => { root.open-url(url); }
                         }
                     }
                 }

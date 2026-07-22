@@ -17,7 +17,8 @@ deliberately.
 - [x] R1-lite and full R1: report storage/reactive write-back plus all five
 research tools; MCP exposes exactly nine shared tools.
 - [x] R2 desktop-first: Research drawer, report/comparison panes, markdown-lite,
-citations/outbound links, card counts, and expanded-evidence entry.
+citations/outbound links, raw-markdown copy, card counts, persistent resizable
+pane width, and expanded-evidence entry.
 - [x] R3: Claude/Codex evidence actions, concurrent run state, doctor, checked-in
 prompt, web-report guardrails, and an account-free fake-CLI HTTP round trip.
 - [x] R4: shared manual/live ingest controller, 120-second floor, failure
@@ -27,7 +28,8 @@ restore.
 verdict/summary/watch enrichment, and user-initiated article briefs with native
 sections plus markdown fallback.
 - [x] Demo polish: terminal pidfile/process-group lifecycle, agent-family run
-reconciliation, and markdown-lite fallback that normalizes all ATX heading levels.
+reconciliation, markdown-lite fallback that normalizes all ATX heading levels,
+and shared SVG disclosure/close/copy affordances.
 - [ ] Needs human review: real subscription logins/quota, presentation-machine
 doctor, live-provider timing, and final fallback assets. These are rehearsal,
 not code blockers.
@@ -55,6 +57,36 @@ native view (follow-on) supersedes this for article briefs; markdown-
 lite remains the path for topic reports and the fallback for
 unstructured submissions. Test: a fixture report exercising every
 subset feature renders with correct hierarchy and all links open.
+
+## Readability pass on report rendering (operator feedback, follow-up to the markdown punch)
+
+Reports currently render as one continuous StyledText blob — bold works,
+but there is no block spacing, so a full report reads as a wall of text
+(operator screenshot: run-in bold headers, cramped bullets, zero
+paragraph gaps). Move from "styled blob" to **block-level rendering**,
+which the original punch specced:
+
+1. **Parse to blocks**: split on blank lines; classify each block as
+   heading (`#`–`######`, normalized), paragraph, bullet list (adjacent
+   `- `/`·` lines), or code. Single newlines inside a paragraph collapse
+   to spaces.
+2. **Render blocks in a VerticalLayout with real spacing**:
+   - paragraph gap 10px; before a heading 18px, after it 6px;
+   - bullet items: marker column (a fixed 14px column with the dot) +
+     hanging indent, 5px between items, 10px around the list;
+   - inline code spans get an inset-background chip look; code blocks a
+     bordered inset box.
+3. **Type**: body 13px / line-height 1.55 ink-2; headings 14.5px / 650
+   ink; bold runs stay ink (they read as labels — the agent's
+   "What is happening." pattern works WITH spacing, not against it).
+4. **Measure cap**: text max-width ~68ch inside the pane — with the
+   panel now resizable, long lines must not stretch to arbitrary widths.
+5. Applies to the single report view AND both comparison panes (shared
+   block-list component + row templates). Structured-section briefs
+   already render natively and are unaffected.
+6. Test: fixture report with headings + multi-paragraph + bullets + code
+   renders as N distinct blocks with expected spacing classes (assert on
+   the parsed block list — pure function — not pixels).
 
 ## Phase R1 — Research tools + write-back storage (~1 day)
 

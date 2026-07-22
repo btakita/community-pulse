@@ -2,6 +2,7 @@ import { Tokens } from "theme.slint";
 
 export component ChevronIconButton inherits Rectangle {
     in property <bool> open: false;
+    in property <angle> rotation: 0deg;
     callback clicked();
 
     width: 26px;
@@ -19,7 +20,7 @@ export component ChevronIconButton inherits Rectangle {
         source: @image-url("icons/chevron.svg");
         image-fit: contain;
         colorize: root.open ? Tokens.accent : Tokens.ink-2;
-        transform-rotation: root.open ? 180deg : 0deg;
+        transform-rotation: root.rotation + (root.open ? 180deg : 0deg);
         animate transform-rotation { duration: 150ms; easing: ease-in-out; }
     }
 
@@ -45,6 +46,33 @@ export component CloseIconButton inherits Rectangle {
         width: 12px;
         height: 12px;
         source: @image-url("icons/close.svg");
+        image-fit: contain;
+        colorize: Tokens.ink-2;
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component CopyIconButton inherits Rectangle {
+    out property <bool> hovered: touch.has-hover;
+    callback clicked();
+
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: touch.has-hover ? Tokens.ink-3 : Tokens.line-strong;
+    background: touch.has-hover ? Tokens.raised : Tokens.surface;
+
+    Image {
+        x: 6px;
+        y: 6px;
+        width: 12px;
+        height: 12px;
+        source: @image-url("icons/copy.svg");
         image-fit: contain;
         colorize: Tokens.ink-2;
     }

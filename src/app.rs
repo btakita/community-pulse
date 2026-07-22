@@ -1,5 +1,5 @@
 use crate::chat::{AgentConfig, ChatEvent, ChatSession};
-use crate::domain::{ChatRole, InterestModel, ResearchReport, ResearchRun};
+use crate::domain::{ChatMessage, ChatRole, InterestModel, ResearchReport, ResearchRun};
 use crate::engine::PulseEngine;
 use crate::live::{IngestController, LivePolicy, PublicFeed};
 use crate::mcp;
@@ -7,11 +7,13 @@ use crate::reactive::UiSnapshot;
 use crate::research::{self, ResearchAgent};
 use crate::setup;
 use crate::tools::ToolBridge;
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
+use arboard::Clipboard;
 use chrono::{Local, Utc};
 use slint::{ComponentHandle, ModelRc, SharedString, Timer, TimerMode, VecModel};
 use std::collections::HashSet;
 use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -223,10 +225,20 @@ macro_rules! wire_callbacks {
                 if url.is_empty() {
                     return;
                 }
-                if let Err(error) = open::that_detached(url.as_str()) {
+                let target = match resolve_open_target(
+                    url.as_str(),
+                    Path::new(env!("CARGO_MANIFEST_DIR")),
+                ) {
+                    Ok(target) => target,
+                    Err(error) => {
+                        eprintln!("open-url: rejected target {url:?} ({error:#})");
+                        return;
+                    }
+                };
+                if let Err(error) = open_target_detached(&target) {
                     bridge.state().append_chat(
                         ChatRole::System,
-                        format!("Could not open source link: {error}"),
+                        format!("Could not open link: {error}"),
                         None,
                     );
                     render_now(&targets, &bridge);
@@ -276,6 +288,20 @@ fn wire_desktop(
             if let Some(window) = weak.upgrade() {
                 window.set_research_view_active(true);
                 apply_research_selection(&window, &bridge.snapshot().research, i64::from(id));
+            }
+        });
+    }
+    {
+        let bridge = bridge.clone();
+        let targets = targets.clone();
+        window.on_copy_text(move |text| {
+            if let Err(error) = copy_to_clipboard(text.as_str()) {
+                bridge.state().append_chat(
+                    ChatRole::System,
+                    format!("Could not copy text: {error}"),
+                    None,
+                );
+                render_now(&targets, &bridge);
             }
         });
     }
@@ -685,23 +711,7 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
         "More Rust".into(),
         "Why?".into(),
     ]));
-    window.set_chat(model(
-        snapshot
-            .chat
-            .into_iter()
-            .map(|message| ChatRow {
-                role: match message.role {
-                    ChatRole::User => "YOU",
-                    ChatRole::Assistant => "PULSE",
-                    ChatRole::Tool => "TOOL",
-                    ChatRole::System => "SYSTEM",
-                }
-                .into(),
-                body: message.body.into(),
-                tool: message.tool.unwrap_or_default().into(),
-            })
-            .collect(),
-    ));
+    window.set_chat(model(snapshot.chat.into_iter().map(chat_row).collect()));
     window.set_busy(busy);
     window.set_status(snapshot.status.into());
     window.set_research_reports(model(research_summary_rows(&snapshot.research)));
@@ -1069,6 +1079,7 @@ fn set_left_research(window: &AppWindow, report: &ResearchReport) {
     window.set_research_left_agent(report.agent.to_uppercase().into());
     window.set_research_left_title(report.title.clone().into());
     window.set_research_left_markdown(styled_markdown(&report.markdown));
+    window.set_research_left_raw_markdown(research_copy_text(report).into());
     window.set_research_left_web_report(report.web_report.clone().unwrap_or_default().into());
     window.set_research_left_citations(model(citation_rows(report)));
     window.set_research_left_structured(uses_structured_sections(report));
@@ -1079,6 +1090,7 @@ fn set_right_research(window: &AppWindow, report: &ResearchReport) {
     window.set_research_right_agent(report.agent.to_uppercase().into());
     window.set_research_right_title(report.title.clone().into());
     window.set_research_right_markdown(styled_markdown(&report.markdown));
+    window.set_research_right_raw_markdown(research_copy_text(report).into());
     window.set_research_right_web_report(report.web_report.clone().unwrap_or_default().into());
     window.set_research_right_citations(model(citation_rows(report)));
     window.set_research_right_structured(uses_structured_sections(report));
@@ -1089,6 +1101,7 @@ fn clear_right_research(window: &AppWindow) {
     window.set_research_right_agent("".into());
     window.set_research_right_title("".into());
     window.set_research_right_markdown(slint::StyledText::default());
+    window.set_research_right_raw_markdown("".into());
     window.set_research_right_web_report("".into());
     window.set_research_right_citations(model(Vec::new()));
     window.set_research_right_structured(false);
@@ -1192,6 +1205,119 @@ fn styled_markdown(markdown: &str) -> slint::StyledText {
         .unwrap_or_else(|_| slint::StyledText::from_plain_text(&markdown))
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum OpenTarget {
+    Web(String),
+    Local(PathBuf),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ArtifactLink {
+    path: String,
+    label: &'static str,
+}
+
+fn chat_artifact_link(body: &str, tool: Option<&str>) -> Option<ArtifactLink> {
+    body.split_whitespace()
+        .chain(tool.into_iter().flat_map(str::split_whitespace))
+        .filter_map(|token| {
+            let token = token.trim_matches(|character: char| {
+                matches!(
+                    character,
+                    '`' | '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';' | ':'
+                )
+            });
+            let normalized = token.replace('\\', "/");
+            if normalized.starts_with("research/logs/") || normalized.contains("/research/logs/") {
+                Some(ArtifactLink {
+                    path: token.trim_end_matches('.').to_owned(),
+                    label: "open log ↗",
+                })
+            } else if normalized.starts_with("research/reports/")
+                || normalized.contains("/research/reports/")
+            {
+                Some(ArtifactLink {
+                    path: token.trim_end_matches('.').to_owned(),
+                    label: "open report ↗",
+                })
+            } else {
+                None
+            }
+        })
+        .next()
+}
+
+fn chat_row(message: ChatMessage) -> ChatRow {
+    let artifact = chat_artifact_link(&message.body, message.tool.as_deref());
+    ChatRow {
+        role: match message.role {
+            ChatRole::User => "YOU",
+            ChatRole::Assistant => "PULSE",
+            ChatRole::Tool => "TOOL",
+            ChatRole::System => "SYSTEM",
+        }
+        .into(),
+        body: message.body.into(),
+        tool: message.tool.unwrap_or_default().into(),
+        artifact_path: artifact
+            .as_ref()
+            .map_or("", |artifact| artifact.path.as_str())
+            .into(),
+        artifact_label: artifact
+            .as_ref()
+            .map_or("", |artifact| artifact.label)
+            .into(),
+    }
+}
+
+fn resolve_open_target(input: &str, repo_root: &Path) -> Result<OpenTarget> {
+    let input = input.trim();
+    if input.starts_with("https://") || input.starts_with("http://") {
+        return Ok(OpenTarget::Web(input.to_owned()));
+    }
+    if input.contains("://") {
+        bail!("unsupported URL scheme");
+    }
+
+    let path = Path::new(input);
+    let candidate = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        repo_root.join(path)
+    }
+    .canonicalize()
+    .with_context(|| format!("canonicalize local open target {input}"))?;
+    let allowed_roots = ["research/logs", "research/reports"]
+        .into_iter()
+        .filter_map(|relative| repo_root.join(relative).canonicalize().ok())
+        .collect::<Vec<_>>();
+    if !allowed_roots
+        .iter()
+        .any(|allowed| candidate.starts_with(allowed))
+    {
+        bail!("local target is outside the research artifact allowlist");
+    }
+    Ok(OpenTarget::Local(candidate))
+}
+
+fn open_target_detached(target: &OpenTarget) -> Result<()> {
+    match target {
+        OpenTarget::Web(url) => open::that_detached(url).context("open web link"),
+        OpenTarget::Local(path) => open::that_detached(path).context("open local artifact"),
+    }
+}
+
+fn copy_to_clipboard(text: &str) -> Result<()> {
+    Clipboard::new()
+        .context("connect to clipboard")?
+        .set_text(text.to_owned())
+        .context("write clipboard text")
+}
+
+fn research_copy_text(report: &ResearchReport) -> String {
+    report.markdown.clone()
+}
+
 fn apply_mobile_snapshot(window: &MobileWindow, snapshot: UiSnapshot) {
     let digest = snapshot
         .digest
@@ -1269,23 +1395,7 @@ fn apply_mobile_snapshot(window: &MobileWindow, snapshot: UiSnapshot) {
             .collect(),
     ));
     window.set_alert(snapshot.alert.into());
-    window.set_chat(model(
-        snapshot
-            .chat
-            .into_iter()
-            .map(|message| ChatRow {
-                role: match message.role {
-                    ChatRole::User => "YOU",
-                    ChatRole::Assistant => "PULSE",
-                    ChatRole::Tool => "TOOL",
-                    ChatRole::System => "SYSTEM",
-                }
-                .into(),
-                body: message.body.into(),
-                tool: message.tool.unwrap_or_default().into(),
-            })
-            .collect(),
-    ));
+    window.set_chat(model(snapshot.chat.into_iter().map(chat_row).collect()));
     window.set_busy(snapshot.loading || snapshot.ingesting);
     window.set_status(snapshot.status.into());
 
@@ -1508,14 +1618,16 @@ fn model<T: Clone + 'static>(values: Vec<T>) -> ModelRc<T> {
 #[cfg(test)]
 mod tests {
     use super::{
-        article_brief_id, card_research_annotations, compact_result, evidence_research_rows,
-        markdown_lite, newest_unseen_report, research_run_label, research_run_progress,
+        OpenTarget, article_brief_id, card_research_annotations, chat_artifact_link,
+        compact_result, evidence_research_rows, markdown_lite, newest_unseen_report,
+        research_copy_text, research_run_label, research_run_progress, resolve_open_target,
         suggested_topic_rows, uses_structured_sections,
     };
     use crate::domain::{ResearchReport, ResearchRun, ResearchSection};
     use chrono::{Duration, Utc};
     use serde_json::json;
     use std::collections::HashSet;
+    use std::fs;
 
     fn report(
         id: i64,
@@ -1566,6 +1678,71 @@ mod tests {
         assert!(rendered.contains("[source](https://example.com)"));
         assert!(rendered.contains("\\![ignored](x.png)"));
         slint::StyledText::from_markdown(&rendered).unwrap();
+    }
+
+    #[test]
+    fn selectable_log_path_resolves_only_inside_the_artifact_allowlist() {
+        let directory = tempfile::tempdir().unwrap();
+        let logs = directory.path().join("research/logs");
+        let reports = directory.path().join("research/reports");
+        fs::create_dir_all(&logs).unwrap();
+        fs::create_dir_all(&reports).unwrap();
+        let log = logs.join("run.log");
+        fs::write(&log, "submitted").unwrap();
+
+        let link = chat_artifact_link(
+            "CLAUDE finished · log research/logs/run.log",
+            Some("research result"),
+        )
+        .unwrap();
+        assert_eq!(link.path, "research/logs/run.log");
+        assert_eq!(link.label, "open log ↗");
+        assert_eq!(
+            resolve_open_target(&link.path, directory.path()).unwrap(),
+            OpenTarget::Local(log.canonicalize().unwrap())
+        );
+
+        let outside = directory.path().join("secrets.txt");
+        fs::write(&outside, "never open this").unwrap();
+        assert!(resolve_open_target("secrets.txt", directory.path()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn artifact_allowlist_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let logs = directory.path().join("research/logs");
+        fs::create_dir_all(&logs).unwrap();
+        fs::create_dir_all(directory.path().join("research/reports")).unwrap();
+        let outside = directory.path().join("outside.log");
+        fs::write(&outside, "private").unwrap();
+        symlink(&outside, logs.join("escape.log")).unwrap();
+
+        assert!(resolve_open_target("research/logs/escape.log", directory.path()).is_err());
+    }
+
+    #[test]
+    fn report_copy_text_round_trips_exact_markdown() {
+        let mut report = report(1, "rust", "claude", "organic", "Diverse", &[], 1);
+        report.markdown = "# Finding\n\n- exact `markdown`\n".to_owned();
+
+        assert_eq!(research_copy_text(&report), report.markdown);
+    }
+
+    #[test]
+    fn report_path_resolves_even_when_the_logs_directory_is_absent() {
+        let directory = tempfile::tempdir().unwrap();
+        let reports = directory.path().join("research/reports");
+        fs::create_dir_all(&reports).unwrap();
+        let report = reports.join("pulse.html");
+        fs::write(&report, "report").unwrap();
+
+        assert_eq!(
+            resolve_open_target("research/reports/pulse.html", directory.path()).unwrap(),
+            OpenTarget::Local(report.canonicalize().unwrap())
+        );
     }
 
     #[test]

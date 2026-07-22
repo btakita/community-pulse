@@ -28,9 +28,34 @@ For local verification, run `make check` before committing. After local changes,
 Only read full source files when tsift results are insufficient.
 <!-- /tsift:code-navigation -->
 
-## Design Convergence
+## Design & Specs
 
-The approved UI design lives in this repo — do not work from screenshots:
+The approved UI design and all feature specs live in this repo — do not
+work from screenshots or memory:
 
-- [`docs/design/mockup-desktop.html`](docs/design/mockup-desktop.html) — open in a browser; all color tokens are CSS custom properties at the top of its `<style>` block, and the "Design spec — for the Slint port" section at the bottom states metrics and component rules.
-- [`docs/design/IMPLEMENTATION.md`](docs/design/IMPLEMENTATION.md) — ordered, file:line work list: P0 correctness fixes (duplicate digest headline, hardcoded card sparklines, displayed-vs-computed math, chat tool-error history poisoning, chat state race) then P1 visual parity (bundled fonts, fader weight mapping, suggested-topic wiring, chat row truncation). Follow it top to bottom; each item has a verification step.
+- **Design source of truth**:
+  [`docs/design/mockup-desktop.html`](docs/design/mockup-desktop.html) and
+  [`docs/design/mockup-mobile.html`](docs/design/mockup-mobile.html) —
+  open in a browser; color tokens are CSS custom properties at the top of
+  each `<style>` block; the spec section at the bottom of the desktop
+  mockup states metrics and component rules.
+- **Feature specs, each with a maintained "Implementation status" section
+  that is the current truth** (the prose below a status header may
+  describe already-finished work — always read status first):
+  [`docs/design/IMPLEMENTATION.md`](docs/design/IMPLEMENTATION.md)
+  (visual parity, outbound links, phone chrome, in-app ingest, attention
+  budget, file deep-links + selectable chat text),
+  [`docs/design/research-interface-plan.md`](docs/design/research-interface-plan.md)
+  (research tools/UI, CLI delegation, enrichment, article briefs, startup
+  integration, terminal lifecycle, live-chat decision),
+  [`docs/design/expand-card-plan.md`](docs/design/expand-card-plan.md),
+  [`docs/design/mcp-integration-plan.md`](docs/design/mcp-integration-plan.md).
+- **Operator requests given verbally/in-prompt**: record your
+  understanding + acceptance criteria in `IMPLEMENTATION.md` before or
+  while implementing, so requirements survive session ends and the
+  operator can review against them.
+- Invariants that hold across all work: the attention budget is
+  engine-enforced (never UI-only); research annotates but never re-ranks;
+  agent-authored content never opens arbitrary URLs/paths (allowlists);
+  fixture mode stays deterministic; `make check` green before every
+  commit.

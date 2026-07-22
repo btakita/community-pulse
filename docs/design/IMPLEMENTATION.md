@@ -26,6 +26,25 @@ implemented and locally verified. The ordered startup, ingest, enrichment, and
 article-brief follow-ons are also implemented; its status section records the
 remaining human review and mobile/R5 deferrals.
 
+## Implementation status (2026-07-22)
+
+- [x] Desktop parity/correctness baseline, attention budget, outbound links,
+mobile-frame rotation, and the shared ingest controller are implemented and
+covered by the existing engine/UI tests.
+- [x] Research demo polish is implemented: companion-terminal lifecycle,
+agent-family report reconciliation, supported markdown heading normalization,
+and shared SVG disclosure/close/copy affordances.
+- [x] Local artifact links and text ergonomics are implemented: canonicalized
+`research/logs/` and `research/reports/` allowlists, selectable chat/tool text,
+whole-message clipboard actions, and exact raw-markdown report copy.
+- [x] Desktop viewport behavior is implemented: an independently scrolling and
+collapsible Mix rail, constrained/elided digest content, and one persistent,
+resizable Agent/Research pane width.
+- [x] The deterministic Xvfb shot harness and demo-launcher CLI smoke target are
+implemented and are part of the documented verification path.
+- [ ] The dynamic z-score tooltip and source-provided post summaries below are
+approved follow-on specs, not part of the completed pass above.
+
 ## P0 — correctness (do these first)
 
 ### 1. Duplicate headline across digest cards
@@ -274,6 +293,175 @@ trigger and R4's `--live` timer call — one code path, two triggers.
    leaves other sources' posts ingested; fixture mode disables; the
    engine-level flow is already covered — add controller-level tests
    with a stub ingester, not network tests.
+
+## Local file deep links + selectable chat text (operator feedback)
+
+**Status: implemented.** Desktop and mobile chat rows share artifact metadata;
+desktop messages expose native selection and hover-copy controls. The open path
+resolves existing files before dispatch and rejects anything outside the two
+approved artifact roots, including symlink escapes.
+
+Two desktop-ergonomics items, related because the first's payoff depends
+partly on the second:
+
+### 1. Deep links to local files (logs, reports)
+
+Chat messages and research surfaces mention local artifacts — most
+importantly the `research/logs/<run>.log` path echoed into Agent chat by
+the run diagnostics, and `research/reports/*.html` web reports. On
+desktop, these must be clickable:
+
+- Extend the `open-url` path to accept local paths: absolute or
+  repo-relative → open via the `open` crate (default handler:
+  editor/viewer per xdg association).
+- **Allowlist, not open season**: only paths under `research/logs/` and
+  `research/reports/` (canonicalize + prefix-check before opening —
+  agent-authored text must not be able to open arbitrary files). Reject
+  silently logged elsewhere.
+- Render: detect known-path patterns in chat/tool-chip text and style
+  them like links (accent underline, pointer cursor, TouchArea). Where
+  detection inside wrapped text is fiddly, render a small "open log ↗"
+  chip under the message instead — same pattern as the markdown link
+  chips.
+- Mobile frame: same process so it works, but do not spend layout time
+  there (deferred with parity).
+
+### 2. Selectable + copyable chat text
+
+Chat bodies are plain `Text` — not selectable, so paths/ids can't be
+copied. Fix:
+
+- Swap chat message bodies (and tool-chip text) to read-only
+  `TextInput` (`read-only: true; wrap: word-wrap;` styled borderless to
+  match current rendering) — Slint gives selection + Ctrl+C natively.
+  Verify styling parity (no focus frame, same colors/line-height) so it
+  is visually indistinguishable from before.
+- Add a small copy icon button on message hover (Rust callback +
+  `arboard` clipboard crate) as the fallback for whole-message copy —
+  useful where StyledText panes (research reports) can't become
+  TextInput without losing formatting; there the button copies the raw
+  markdown.
+- Test: a chat message containing a log path can be selected, copied,
+and its rendered link opens the file; report copy button round-trips
+the exact markdown.
+
+Acceptance is code-enforced by the allowlist and symlink-escape tests plus the
+exact-markdown round-trip test. The UI may use a dedicated `open log ↗` or
+`open report ↗` chip when a wrapped inline path cannot safely host a hit target;
+the chip still routes through the same allowlisted `open-url` callback.
+
+## Desktop viewport + side-pane behavior (operator feedback)
+
+**Status: implemented.** The supported desktop minimum remains 1100×720 and
+the surface must not depend on content extending beyond that viewport.
+
+- The Mix rail is 262px expanded and 44px collapsed. Its SVG chevron toggles
+the state; topic/suggestion content scrolls independently while the 78px
+attention-budget master remains pinned at the bottom.
+- The digest column owns the remaining width and scrolls vertically. Headline
+layout has a zero minimum width and elides inside the card rather than forcing
+the card or column outside the viewport.
+- Agent and Research are two states of the same right pane, not two drawer
+sizes. They share one 420px default width, retain the current width on tab
+switch, and expose an 8px `ew-resize` divider clamped to 320–620px. Clicking the
+divider snaps between the default and 530px demo width; dragging permits
+continuous adjustment.
+- The header, Mix rail, digest, and right pane remain inside the window at the
+minimum size. `09-minimum-viewport.png` is the deterministic acceptance image;
+`07-resizable-agent-pane.png` and `08-resizable-research-pane.png` must have the
+same divider x-coordinate.
+
+## Shared icon affordances (operator feedback)
+
+**Status: implemented.** Interactive disclosure, close, and copy controls use
+repo-owned SVG assets through shared Slint components rather than Unicode text
+glyphs. Disclosure icons rotate to reflect open/closed state, all buttons have
+a 24–26px hit target, and hover/active treatment comes from the shared token
+palette. Report copy always receives raw markdown even though its pane renders
+styled content.
+
+## Deterministic demo shots + launcher smoke (tracker item)
+
+**Status: implemented.** `make demo-shots` builds the all-features binary and
+runs `scripts/capture-demo-shots.sh` under a 1920×1080 Xvfb display with the
+software Slint backend, temporary SQLite files, bundled fixture data, and the
+replay agent. The harness emits one numbered, descriptive PNG for each scripted
+desktop beat plus the legacy desktop/mobile/rotation smoke captures. The
+manifest in `demo/shots/README.md` is the authoritative beat-to-file map.
+
+`make demo-launcher-smoke` runs `bin/desktop-and-mobile.sh --help` against the
+built binary, so Clap parses the launcher's real argument vector without
+opening windows or starting ingest. `make check` depends on this smoke target.
+The launcher contract is `app --companion --mcp-port 7432 --live
+--ingest-interval 300`; `--live 300` is invalid and must fail the smoke.
+
+## Dynamic z-score tooltip (operator request)
+
+Hovering any z badge (digest card `z +2.9 ▲`, evidence panel z stat)
+shows a tooltip that BOTH teaches the metric and interprets the actual
+value. Slint has no built-in tooltip — build a small hover popup
+(TouchArea `has-hover` with ~350ms delay → floating Rectangle above the
+badge, dismiss on hover-out; reuse tokens: raised surface, line border,
+mono text, max-width ~280px).
+
+Content is composed in Rust — `fn z_tooltip(z, mentions_6h,
+baseline_mean, baseline_stddev) -> String` — from three parts:
+
+1. **The concrete numbers, always**:
+   `"{mentions_6h} mentions this 6h vs typical {μ:.1} ± {σ:.1}"`.
+2. **A dynamic interpretation band** (pick by z value):
+   - z ≥ 3 → `"rare: {z:.1}σ above its own weekly norm"`
+   - 2 ≤ z < 3 → `"unusual: well above its typical week"`
+   - 1 ≤ z < 2 → `"elevated: above its usual range"`
+   - −1 < z < 1 → `"normal range for this topic"`
+   - z ≤ −1 → `"cooling: below its weekly norm"`
+3. **Honesty caveats, only when they apply**:
+   - σ < 1.0 → `"quiet topic: z uses a σ floor of 1.0"`
+   - baseline_mean < 1.0 → `"small baseline — z can overstate;
+     check mentions + sources"`
+
+Close with the fixed one-liner: `"z compares a topic to its own
+history, not to other topics"` — the self-normalization property is the
+thing users most misread.
+
+Notes: same tooltip component reused on both badges; keyboard/touch
+fallback not required (desktop hover feature); tests unit-test
+`z_tooltip` band selection + caveat inclusion (pure function, no UI
+test needed); the tooltip must never block clicks on the card beneath.
+
+## Source-provided post summaries (operator request)
+
+The sources sometimes carry author-provided text: Product Hunt entries
+have a summary/description; HN `story_text` exists for self-posts
+(Ask/Show HN); Lobsters `description` for text posts. Link posts have
+nothing — and we NEVER fabricate: no text → no affordance.
+
+1. **Ingest**: capture into a new `summary TEXT NOT NULL DEFAULT ''`
+   column on `posts` (add to the CREATE TABLE + a migration guard for
+   existing dbs). Normalize: strip HTML tags/entities to plain text,
+   collapse whitespace, trim to ~500 chars on ingest. Sources: PH
+   `entry.summary`/`content`, HN `story_text`, Lobsters `description`.
+2. **Thread through**: `EvidencePost` gains `summary`; `DigestCard`
+   gains `headline_summary` (the headline post's summary, often empty).
+3. **UI (tooltip + expandable, space-economical)**:
+   - Evidence post rows with a non-empty summary show a small
+     **chevron-down disclosure icon button** (same SVG icon family and
+     ~24px hit target as the expand-card affordance — icon, not a text
+     glyph). Hover on the row → the shared tooltip component (same one
+     as the z-score tooltip) shows the first ~200 chars.
+   - Click the icon → the summary expands inline under the post row
+     (full stored text, ink-2, small); the icon rotates 180° while open
+     and closes it again — identical interaction grammar to the card's
+     evidence chevron.
+   - Digest card headline: tooltip only (no inline expansion — the card
+     already has the evidence panel for depth).
+   - Attribution matters: label the tooltip/expansion "author's text ·
+     <source>" so it's never mistaken for our summary or an agent's.
+4. **Fixture**: give ~half the fixture posts realistic summaries so the
+   feature demos deterministically and the empty-state (no glyph) is
+   also visible.
+5. **Tests**: HTML stripped; empty summary → no glyph/affordance;
+   truncation at ingest; tooltip text matches stored summary prefix.
 
 ## Explicit non-goals (don't spend time here)
 
