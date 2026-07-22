@@ -30,6 +30,9 @@ sections plus markdown fallback.
 - [x] Demo polish: terminal pidfile/process-group lifecycle, agent-family run
 reconciliation, markdown-lite fallback that normalizes all ATX heading levels,
 and shared SVG disclosure/close/copy affordances.
+- [x] Report readability follow-up: a pure markdown-lite block parser feeds one
+shared heading/paragraph/bullet/code renderer in the single report and both
+comparison panes, with bounded measure and block-level spacing.
 - [ ] Needs human review: real subscription logins/quota, presentation-machine
 doctor, live-provider timing, and final fallback assets. These are rehearsal,
 not code blockers.
@@ -59,6 +62,10 @@ unstructured submissions. Test: a fixture report exercising every
 subset feature renders with correct hierarchy and all links open.
 
 ## Readability pass on report rendering (operator feedback, follow-up to the markdown punch)
+
+**Status: implemented.** Topic reports are parsed into distinct blocks before
+rendering; single-view and comparison panes share the same bounded-width Slint
+component. Parser tests assert semantic block boundaries rather than pixels.
 
 Reports currently render as one continuous StyledText blob — bold works,
 but there is no block spacing, so a full report reads as a wall of text

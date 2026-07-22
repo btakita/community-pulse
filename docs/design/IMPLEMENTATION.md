@@ -47,8 +47,11 @@ horizontal scrollbar can obscure or displace rail controls.
 divider has no click-to-snap preset behavior.
 - [x] The deterministic Xvfb shot harness and demo-launcher CLI smoke target are
 implemented and are part of the documented verification path.
-- [ ] The dynamic z-score tooltip and source-provided post summaries below are
-approved follow-on specs, not part of the completed pass above.
+- [x] The shared delayed hover-tooltip primitive and dynamic z-score content are
+implemented on digest-card and evidence z badges, including value bands and
+conditional baseline caveats.
+- [x] Source-provided post summaries are ingested without fabrication and shown
+through shared headline tooltips plus expandable evidence-row attribution.
 
 ## P0 — correctness (do these first)
 
@@ -409,6 +412,10 @@ The launcher contract is `app --companion --mcp-port 7432 --live
 
 ## Dynamic z-score tooltip (operator request)
 
+**Status: implemented.** Digest-card and evidence z badges share one 350ms,
+token-styled hover primitive. Tooltip content comes from the pure `z_tooltip`
+formatter, with unit coverage for every band and both conditional caveats.
+
 Hovering any z badge (digest card `z +2.9 ▲`, evidence panel z stat)
 shows a tooltip that BOTH teaches the metric and interprets the actual
 value. Slint has no built-in tooltip — build a small hover popup
@@ -443,6 +450,12 @@ test needed); the tooltip must never block clicks on the card beneath.
 
 ## Source-provided post summaries (operator request)
 
+**Status: implemented.** Source-authored text is normalized and stored with an
+existing-database migration guard, threaded to cards and evidence, and exposed
+through the shared delayed tooltip. Evidence rows use the requested paragraph
+glyph to toggle full inline text; exactly half of the fixture posts exercise the
+summary state, while the rest retain no affordance.
+
 The sources sometimes carry author-provided text: Product Hunt entries
 have a summary/description; HN `story_text` exists for self-posts
 (Ask/Show HN); Lobsters `description` for text posts. Link posts have
@@ -457,14 +470,11 @@ nothing — and we NEVER fabricate: no text → no affordance.
    gains `headline_summary` (the headline post's summary, often empty).
 3. **UI (tooltip + expandable, space-economical)**:
    - Evidence post rows with a non-empty summary show a small
-     **chevron-down disclosure icon button** (same SVG icon family and
-     ~24px hit target as the expand-card affordance — icon, not a text
-     glyph). Hover on the row → the shared tooltip component (same one
-     as the z-score tooltip) shows the first ~200 chars.
-   - Click the icon → the summary expands inline under the post row
-     (full stored text, ink-2, small); the icon rotates 180° while open
-     and closes it again — identical interaction grammar to the card's
-     evidence chevron.
+     **paragraph glyph (`¶`)** with a ~24px hit target. Hover the glyph →
+     the shared tooltip component (same one as the z-score tooltip) shows
+     the first ~200 chars.
+   - Click the glyph → the summary expands inline under the post row
+     (full stored text, ink-2, small); click it again to collapse.
    - Digest card headline: tooltip only (no inline expansion — the card
      already has the evidence panel for depth).
    - Attribution matters: label the tooltip/expansion "author's text ·
@@ -474,6 +484,36 @@ nothing — and we NEVER fabricate: no text → no affordance.
    also visible.
 5. **Tests**: HTML stripped; empty summary → no glyph/affordance;
    truncation at ingest; tooltip text matches stored summary prefix.
+
+## Remove channels from The Mix (operator request)
+
+Suggested chips can ADD a channel but nothing can remove one — the mix
+only grows. Fix with explicit removal, and make the semantics honest:
+
+1. **Semantics — removal is "clear my stance", not "hide this topic"**:
+   removing a channel calls the existing `set_interest(topic, 0.0)` path
+   (weight 0 deletes the interests row). The topic leaves the mix list
+   and may resurface as a suggested chip if it trends. CRITICAL
+   distinction to preserve in copy/tooltip: a removed (neutral) topic
+   can still appear in the digest (affinity 1.0) — **mute is the
+   exclusion tool, remove is the tidy-up tool**. Tooltip on the remove
+   button: "remove from mix (topic stays eligible — use M to exclude)".
+2. **UI**: an ✕ icon button (shared SVG family, ≥24px target) revealed
+   on channel hover, placed beside the M mute button. No confirmation —
+   the action is reversible (re-add from suggested or by chat) and
+   low-stakes by the semantics above. Any channel can be removed,
+   including the seeded defaults; an empty mix is legal (digest then
+   ranks purely by trend).
+3. **Wiring**: reuses existing bridge `set_interest` — no new tool.
+   Note for chat/agents: `set_interest(topic, 0)` already achieves
+   removal; the replay agent's vocabulary may add "reset <topic>" if
+   cheap, but that is optional.
+4. **Mobile frame**: same button on the Mix tab channels (shared
+   component); no extra layout work beyond it fitting the 56px strip.
+5. **Tests**: remove → interests row gone, channel leaves topic_rows,
+   digest unchanged for a neutral topic (affinity 1.0 before and
+   after); removed-then-trending topic reappears in suggested; mute ≠
+   remove covered explicitly.
 
 ## Explicit non-goals (don't spend time here)
 

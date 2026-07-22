@@ -2,10 +2,12 @@ export struct DigestRow {
     id: string,
     topic: string,
     headline: string,
+    headline-tooltip: string,
     url: string,
     sources: string,
     score: string,
     delta: string,
+    z-tooltip: string,
     mentions: string,
     spark-line: string,
     spark-area: string,
@@ -41,6 +43,8 @@ export struct EvidencePostRow {
     title: string,
     url: string,
     detail: string,
+    summary: string,
+    summary-tooltip: string,
     claude-brief-id: int,
     codex-brief-id: int,
 }
@@ -52,6 +56,7 @@ export struct EvidenceRow {
     baseline-value: string,
     baseline: string,
     z-score: string,
+    z-tooltip: string,
     first-seen: string,
     source-count: string,
     spark-line: string,
@@ -86,6 +91,13 @@ export struct ResearchSectionRow {
     heading: string,
     body: styled-text,
     quotes: [ResearchQuoteRow],
+}
+
+export struct ReportBlockRow {
+    kind: string,
+    content: styled-text,
+    code: string,
+    gap-before: float,
 }
 
 export struct ResearchSummaryRow {

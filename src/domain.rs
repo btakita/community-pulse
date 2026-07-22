@@ -15,6 +15,8 @@ pub struct CommunityPost {
     pub published_at: DateTime<Utc>,
     pub points: i64,
     #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
     pub tags: Vec<String>,
 }
 
@@ -24,10 +26,14 @@ pub struct DigestCard {
     pub topic: String,
     pub headline: String,
     pub headline_url: String,
+    pub headline_source: String,
+    pub headline_summary: String,
     pub sources: Vec<String>,
     pub score: f64,
     pub trend_score: f64,
     pub interest_affinity: f64,
+    pub baseline_mean: f64,
+    pub baseline_stddev: f64,
     pub z_score: f64,
     pub mentions_1h: usize,
     pub mentions_6h: usize,
@@ -40,6 +46,7 @@ pub struct EvidencePost {
     pub source: String,
     pub title: String,
     pub url: String,
+    pub summary: String,
     pub published_at: DateTime<Utc>,
 }
 

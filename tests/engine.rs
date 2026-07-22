@@ -2,6 +2,7 @@ use chrono::{TimeZone, Utc};
 use community_pulse::PulseEngine;
 use community_pulse::domain::{DEFAULT_BUDGET, InterestModel, MAX_BUDGET};
 use community_pulse::engine::extract_topics;
+use rusqlite::Connection;
 
 fn fixture_engine() -> (PulseEngine, chrono::DateTime<Utc>) {
     let now = Utc.with_ymd_and_hms(2026, 7, 22, 12, 0, 0).unwrap();
@@ -25,6 +26,40 @@ fn database_snapshot_restores_posts_and_user_budget() {
     let restored = PulseEngine::open(&snapshot).unwrap();
     assert_eq!(restored.post_count().unwrap(), 30);
     assert_eq!(restored.budget().unwrap(), 8);
+}
+
+#[test]
+fn existing_databases_gain_the_post_summary_column() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("legacy.db");
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute_batch(
+            r#"
+            CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                source TEXT NOT NULL,
+                title TEXT NOT NULL,
+                url TEXT NOT NULL,
+                author TEXT NOT NULL,
+                published_at INTEGER NOT NULL,
+                points INTEGER NOT NULL
+            );
+            "#,
+        )
+        .unwrap();
+    drop(connection);
+
+    let engine = PulseEngine::open(&database).unwrap();
+    drop(engine);
+    let connection = Connection::open(&database).unwrap();
+    let mut statement = connection.prepare("PRAGMA table_info(posts)").unwrap();
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert!(columns.iter().any(|column| column == "summary"));
 }
 
 #[test]
@@ -112,6 +147,8 @@ fn explanation_contains_velocity_baseline_sparkline_and_posts() {
     assert!(evidence.mentions_6h >= evidence.mentions_1h);
     assert!(evidence.mentions_24h >= evidence.mentions_6h);
     assert!(!evidence.posts.is_empty());
+    assert!(evidence.posts.iter().any(|post| !post.summary.is_empty()));
+    assert!(evidence.posts.iter().any(|post| post.summary.is_empty()));
     assert!(evidence.z_score.is_finite());
     assert!(evidence.baseline_mean.is_finite());
 }

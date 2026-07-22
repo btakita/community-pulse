@@ -15,7 +15,7 @@ pub struct PulseEngine {
     connection: Connection,
 }
 
-type HeadlineCandidate = (String, String, String, String);
+type HeadlineCandidate = (String, String, String, String, String);
 type HeadlineCandidates = Vec<HeadlineCandidate>;
 
 impl PulseEngine {
@@ -46,7 +46,8 @@ impl PulseEngine {
                 url          TEXT NOT NULL,
                 author       TEXT NOT NULL,
                 published_at INTEGER NOT NULL,
-                points       INTEGER NOT NULL
+                points       INTEGER NOT NULL,
+                summary      TEXT NOT NULL DEFAULT ''
             );
 
             CREATE TABLE IF NOT EXISTS topics (
@@ -113,6 +114,12 @@ impl PulseEngine {
             CREATE INDEX IF NOT EXISTS idx_research_reports_topic_created
             ON research_reports(topic_id, created_at DESC, id DESC);
             "#,
+        )?;
+        ensure_column(
+            &self.connection,
+            "posts",
+            "summary",
+            "TEXT NOT NULL DEFAULT ''",
         )?;
         ensure_column(&self.connection, "research_reports", "verdict", "TEXT")?;
         ensure_column(&self.connection, "research_reports", "summary", "TEXT")?;
@@ -190,15 +197,16 @@ impl PulseEngine {
     fn upsert_post(transaction: &Transaction<'_>, post: &CommunityPost) -> Result<usize> {
         let changed = transaction.execute(
             r#"
-            INSERT INTO posts (id, source, title, url, author, published_at, points)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            INSERT INTO posts (id, source, title, url, author, published_at, points, summary)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
             ON CONFLICT(id) DO UPDATE SET
                 source = excluded.source,
                 title = excluded.title,
                 url = excluded.url,
                 author = excluded.author,
                 published_at = excluded.published_at,
-                points = excluded.points
+                points = excluded.points,
+                summary = excluded.summary
             "#,
             params![
                 post.id,
@@ -208,6 +216,7 @@ impl PulseEngine {
                 post.author,
                 post.published_at.timestamp(),
                 post.points,
+                post.summary,
             ],
         )?;
 
@@ -308,8 +317,8 @@ impl PulseEngine {
         let requested = limit.unwrap_or(self.budget()?).clamp(1, MAX_BUDGET);
         let mut statement = self.connection.prepare(
             r#"
-            SELECT t.id, t.display, s.mentions_1h, s.mentions_6h, s.mentions_24h,
-                   s.z_score, s.trend_score
+                SELECT t.id, t.display, s.mentions_1h, s.mentions_6h, s.mentions_24h,
+                       s.baseline_mean, s.baseline_stddev, s.z_score, s.trend_score
             FROM topics t
             JOIN score_snapshots s ON s.topic_id = t.id
             WHERE s.captured_at = (
@@ -328,12 +337,24 @@ impl PulseEngine {
                 row.get::<_, i64>(4)? as usize,
                 row.get::<_, f64>(5)?,
                 row.get::<_, f64>(6)?,
+                row.get::<_, f64>(7)?,
+                row.get::<_, f64>(8)?,
             ))
         })?;
 
         let mut cards = Vec::new();
         for row in rows {
-            let (id, topic, mentions_1h, mentions_6h, mentions_24h, z_score, trend_score) = row?;
+            let (
+                id,
+                topic,
+                mentions_1h,
+                mentions_6h,
+                mentions_24h,
+                baseline_mean,
+                baseline_stddev,
+                z_score,
+                trend_score,
+            ) = row?;
             let affinity = interests.affinity(&id);
             if affinity == 0.0 {
                 continue;
@@ -343,10 +364,14 @@ impl PulseEngine {
                 topic,
                 headline: String::new(),
                 headline_url: String::new(),
+                headline_source: String::new(),
+                headline_summary: String::new(),
                 sources: Vec::new(),
                 score: trend_score * affinity,
                 trend_score,
                 interest_affinity: affinity,
+                baseline_mean,
+                baseline_stddev,
                 z_score,
                 mentions_1h,
                 mentions_6h,
@@ -360,16 +385,18 @@ impl PulseEngine {
             let candidates = self.headline_candidates(&card.id)?;
             card.sources = candidates
                 .iter()
-                .map(|(_, _, source, _)| source.clone())
+                .map(|(_, _, source, _, _)| source.clone())
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect();
-            if let Some((_, title, _, url)) = candidates
+            if let Some((_, title, source, url, summary)) = candidates
                 .into_iter()
-                .find(|(post_id, _, _, _)| used_posts.insert(post_id.clone()))
+                .find(|(post_id, _, _, _, _)| used_posts.insert(post_id.clone()))
             {
                 card.headline = title;
                 card.headline_url = url;
+                card.headline_source = source;
+                card.headline_summary = summary;
             } else {
                 card.headline = format!("{} is gaining attention", card.topic);
             }
@@ -472,7 +499,7 @@ impl PulseEngine {
     fn headline_candidates(&self, topic: &str) -> Result<HeadlineCandidates> {
         let mut statement = self.connection.prepare(
             r#"
-                SELECT p.id, p.title, p.source, p.url
+                SELECT p.id, p.title, p.source, p.url, p.summary
                 FROM posts p
                 JOIN post_topics pt ON pt.post_id = p.id
                 WHERE pt.topic_id = ?1
@@ -486,12 +513,13 @@ impl PulseEngine {
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
             ))
         })?;
         let mut candidates = Vec::new();
         for row in rows {
-            let (post_id, title, source, url) = row?;
-            candidates.push((post_id, title, source, url));
+            let (post_id, title, source, url, summary) = row?;
+            candidates.push((post_id, title, source, url, summary));
         }
         Ok(candidates)
     }
@@ -531,7 +559,7 @@ impl PulseEngine {
 
         let mut post_statement = self.connection.prepare(
             r#"
-            SELECT p.source, p.title, p.url, p.published_at
+            SELECT p.source, p.title, p.url, p.summary, p.published_at
             FROM posts p
             JOIN post_topics pt ON pt.post_id = p.id
             WHERE pt.topic_id = ?1
@@ -541,11 +569,12 @@ impl PulseEngine {
         )?;
         let posts = post_statement
             .query_map([topic], |row| {
-                let timestamp = row.get::<_, i64>(3)?;
+                let timestamp = row.get::<_, i64>(4)?;
                 Ok(EvidencePost {
                     source: row.get(0)?,
                     title: row.get(1)?,
                     url: row.get(2)?,
+                    summary: row.get(3)?,
                     published_at: DateTime::from_timestamp(timestamp, 0).unwrap_or_default(),
                 })
             })?
@@ -1127,6 +1156,8 @@ struct FixturePost {
     author: String,
     age_minutes: i64,
     points: i64,
+    #[serde(default)]
+    summary: String,
     tags: Vec<String>,
 }
 
@@ -1140,6 +1171,7 @@ impl FixturePost {
             author: self.author,
             published_at: now - Duration::minutes(self.age_minutes),
             points: self.points,
+            summary: self.summary,
             tags: self.tags,
         }
     }

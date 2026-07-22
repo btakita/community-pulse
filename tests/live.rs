@@ -38,6 +38,7 @@ impl IngestFeed for StubFeed {
                     author: "fixture".to_owned(),
                     published_at: Utc::now(),
                     points: 7,
+                    summary: String::new(),
                     tags: vec!["controller-test".to_owned()],
                 }]),
             ),

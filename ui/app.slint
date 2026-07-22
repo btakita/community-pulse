@@ -1,7 +1,7 @@
 import { LineEdit, Palette, ScrollView } from "std-widgets.slint";
 import "fonts/InstrumentSans[wdth,wght].ttf";
 import "fonts/JetBrainsMono[wght].ttf";
-import { DigestRow, TopicRow, ChatRow, EvidencePostRow, EvidenceRow, ResearchTitleRow, ResearchSummaryRow, SuggestedTopicRow, ResearchSectionRow, CitationRow, SourceStatusRow } from "models.slint";
+import { DigestRow, TopicRow, ChatRow, EvidencePostRow, EvidenceRow, ResearchTitleRow, ResearchSummaryRow, SuggestedTopicRow, ResearchSectionRow, ReportBlockRow, CitationRow, SourceStatusRow } from "models.slint";
 import { Tokens } from "theme.slint";
 import { ChevronIconButton, CloseIconButton, CopyIconButton } from "icons.slint";
 
@@ -362,9 +362,60 @@ component AttentionBudgetMaster inherits Rectangle {
     }
 }
 
+component HoverTooltip inherits Rectangle {
+    in property <string> text;
+    in property <bool> align-right: false;
+    in property <bool> clickable: false;
+    out property <bool> hovered: hover.has-hover;
+    callback clicked();
+    private property <bool> ready: false;
+
+    background: transparent;
+    clip: false;
+
+    Timer {
+        interval: 350ms;
+        running: hover.has-hover && root.text != "" && !root.ready;
+        triggered => { root.ready = true; }
+    }
+
+    if root.ready && hover.has-hover: tooltip := Rectangle {
+        x: root.align-right ? root.width - self.width : 0px;
+        y: -self.height - 7px;
+        width: min(280px, max(150px, tooltip-text.preferred-width + 18px));
+        height: tooltip-text.preferred-height + 16px;
+        z: 1000;
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: Tokens.line;
+        background: Tokens.raised;
+        tooltip-text := Text {
+            x: 9px;
+            y: 8px;
+            width: parent.width - 18px;
+            text: root.text;
+            color: Tokens.ink-2;
+            font-family: "JetBrains Mono";
+            font-size: 9px;
+            wrap: word-wrap;
+        }
+    }
+
+    hover := TouchArea {
+        mouse-cursor: root.clickable ? pointer : default;
+        clicked => { root.clicked(); }
+        changed has-hover => {
+            if (!self.has-hover) {
+                root.ready = false;
+            }
+        }
+    }
+}
+
 component EvidenceStat inherits Rectangle {
     in property <string> label;
     in property <string> value;
+    in property <string> tooltip;
     in property <bool> accent: false;
 
     background: transparent;
@@ -390,6 +441,11 @@ component EvidenceStat inherits Rectangle {
         font-family: "JetBrains Mono";
         font-size: 13px;
         font-weight: 650;
+    }
+    HoverTooltip {
+        width: parent.width;
+        height: parent.height;
+        text: root.tooltip;
     }
 }
 
@@ -473,13 +529,26 @@ component EvidencePanel inherits Rectangle {
 
         HorizontalLayout {
             MonoLabel { text: "EVIDENCE"; horizontal-stretch: 1; }
-            Text {
-                text: data.z-score;
-                color: Tokens.accent;
-                font-family: "JetBrains Mono";
-                font-size: 10px;
-                font-weight: 700;
-            }
+                Rectangle {
+                    width: 58px;
+                    height: 16px;
+                    background: transparent;
+                    Text {
+                        width: parent.width;
+                        text: data.z-score;
+                        color: Tokens.accent;
+                        font-family: "JetBrains Mono";
+                        font-size: 10px;
+                        font-weight: 700;
+                        horizontal-alignment: right;
+                    }
+                    HoverTooltip {
+                        width: parent.width;
+                        height: parent.height;
+                        text: data.z-tooltip;
+                        align-right: true;
+                    }
+                }
             CloseIconButton {
                 clicked => { root.close(); }
             }
@@ -516,7 +585,7 @@ component EvidencePanel inherits Rectangle {
             spacing: 18px;
             EvidenceStat { label: "MENTIONS / 6H"; value: data.mentions; horizontal-stretch: 1; }
             EvidenceStat { label: "7-DAY BASELINE"; value: data.baseline-value; horizontal-stretch: 1; }
-            EvidenceStat { label: "Z-SCORE"; value: data.z-score; accent: true; horizontal-stretch: 1; }
+                EvidenceStat { label: "Z-SCORE"; value: data.z-score; tooltip: data.z-tooltip; accent: true; horizontal-stretch: 1; }
             EvidenceStat { label: "FIRST SEEN"; value: data.first-seen; horizontal-stretch: 1; }
             EvidenceStat { label: "SOURCES"; value: data.source-count; horizontal-stretch: 1; }
         }
@@ -529,16 +598,17 @@ component EvidencePanel inherits Rectangle {
         }
 
         VerticalLayout {
-            height: root.posts.length * 38px;
             spacing: 0px;
-            for post in root.posts: Rectangle {
-                height: 38px;
+            for post in root.posts: post-row := Rectangle {
+                private property <bool> summary-open: false;
+                height: summary-open ? summary-card.height + 46px : 38px;
                 background: Tokens.surface;
                 border-width: 1px;
                 border-color: Tokens.line;
                 Text {
                     x: 9px;
                     width: 58px;
+                    height: 38px;
                     text: post.source;
                     color: Tokens.ink-3;
                     font-family: "JetBrains Mono";
@@ -548,7 +618,8 @@ component EvidencePanel inherits Rectangle {
                 }
                 Text {
                     x: 70px;
-                    width: parent.width - 254px;
+                    width: parent.width - 280px;
+                    height: 38px;
                     text: post.title;
                     color: Tokens.ink-2;
                     font-size: 10px;
@@ -556,8 +627,9 @@ component EvidencePanel inherits Rectangle {
                     overflow: elide;
                 }
                 Text {
-                    x: parent.width - 180px;
+                    x: parent.width - 184px;
                     width: 64px;
+                    height: 38px;
                     text: post.detail;
                     color: Tokens.ink-3;
                     font-family: "JetBrains Mono";
@@ -569,6 +641,7 @@ component EvidencePanel inherits Rectangle {
                 claude-brief := Text {
                     x: parent.width - 108px;
                     width: 50px;
+                    height: 38px;
                     text: post.claude-brief-id >= 0 ? "C  📄" : "C brief";
                     color: Tokens.accent;
                     font-family: "JetBrains Mono";
@@ -590,6 +663,7 @@ component EvidencePanel inherits Rectangle {
                 codex-brief := Text {
                     x: parent.width - 55px;
                     width: 48px;
+                    height: 38px;
                     text: post.codex-brief-id >= 0 ? "X  📄" : "X brief";
                     color: Tokens.accent;
                     font-family: "JetBrains Mono";
@@ -609,15 +683,72 @@ component EvidencePanel inherits Rectangle {
                     }
                 }
                 Rectangle {
-                    y: parent.height - 1px;
+                    y: 37px;
                     width: parent.width;
                     height: 1px;
                     background: post-touch.has-hover ? Tokens.accent : transparent;
                 }
                 post-touch := TouchArea {
-                    width: parent.width - 116px;
+                    width: parent.width - 210px;
+                    height: 38px;
                     mouse-cursor: pointer;
                     clicked => { root.open-url(post.url); }
+                }
+                if post.summary != "": summary-glyph := Rectangle {
+                    x: parent.width - 210px;
+                    y: 7px;
+                    width: 20px;
+                    height: 24px;
+                    border-radius: 5px;
+                    background: summary-hover.hovered ? Tokens.accent-soft : transparent;
+                    Text {
+                        text: "¶";
+                        color: Tokens.accent;
+                        font-family: "JetBrains Mono";
+                        font-size: 12px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    summary-hover := HoverTooltip {
+                        width: parent.width;
+                        height: parent.height;
+                        text: post.summary-tooltip;
+                        align-right: true;
+                        clickable: true;
+                        clicked => { post-row.summary-open = !post-row.summary-open; }
+                    }
+                }
+                summary-card := Rectangle {
+                    visible: post.summary != "" && post-row.summary-open;
+                    x: 9px;
+                    y: 43px;
+                    width: parent.width - 18px;
+                    height: summary-text.preferred-height + 34px;
+                    border-radius: 7px;
+                    border-width: 1px;
+                    border-color: Tokens.line;
+                    background: Tokens.raised;
+                    Text {
+                        x: 10px;
+                        y: 7px;
+                        width: parent.width - 20px;
+                        height: 12px;
+                        text: "author's text · " + post.source;
+                        color: Tokens.accent;
+                        font-family: "JetBrains Mono";
+                        font-size: 8px;
+                        font-weight: 700;
+                    }
+                    summary-text := Text {
+                        x: 10px;
+                        y: 21px;
+                        width: parent.width - 20px;
+                        text: post.summary;
+                        color: Tokens.ink-2;
+                        font-size: 10px;
+                        wrap: word-wrap;
+                    }
                 }
             }
         }
@@ -744,7 +875,7 @@ component DigestCard inherits Rectangle {
     callback brief-requested(string, string);
     callback open-url(string);
 
-    clip: true;
+    clip: false;
     height: selected ? card-layout.preferred-height + 26px : data.research-summary == "" ? 84px : 116px;
     border-radius: 12px;
     border-width: 1px;
@@ -784,7 +915,7 @@ component DigestCard inherits Rectangle {
                             width: parent.width;
                             height: parent.height;
                             text: data.headline;
-                        color: headline-touch.has-hover ? Tokens.accent : Tokens.ink;
+                        color: headline-hover.hovered ? Tokens.accent : Tokens.ink;
                         font-size: 14.5px;
                         font-weight: 650;
                         overflow: elide;
@@ -793,10 +924,13 @@ component DigestCard inherits Rectangle {
                         y: parent.height - 1px;
                         width: parent.width;
                         height: 1px;
-                        background: headline-touch.has-hover ? Tokens.accent : transparent;
+                        background: headline-hover.hovered ? Tokens.accent : transparent;
                     }
-                    headline-touch := TouchArea {
-                        mouse-cursor: pointer;
+                    headline-hover := HoverTooltip {
+                        width: parent.width;
+                        height: parent.height;
+                        text: data.headline-tooltip;
+                        clickable: true;
                         clicked => { root.open-url(data.url); }
                     }
                 }
@@ -856,13 +990,24 @@ component DigestCard inherits Rectangle {
                         end-x: data.spark-end-x;
                         end-y: data.spark-end-y;
                     }
+                Rectangle {
+                    height: 14px;
+                    background: transparent;
                     Text {
+                        width: parent.width;
                         text: data.delta;
                         color: Tokens.rise;
-                    font-family: "JetBrains Mono";
-                    font-size: 9.5px;
-                    font-weight: 700;
-                    horizontal-alignment: right;
+                        font-family: "JetBrains Mono";
+                        font-size: 9.5px;
+                        font-weight: 700;
+                        horizontal-alignment: right;
+                    }
+                    HoverTooltip {
+                        width: parent.width;
+                        height: parent.height;
+                        text: data.z-tooltip;
+                        align-right: true;
+                    }
                 }
             }
         }
@@ -1075,10 +1220,96 @@ component ResearchSummaryCard inherits Rectangle {
     }
 }
 
+component ReportBlocks inherits VerticalLayout {
+    in property <[ReportBlockRow]> blocks;
+    callback open-url(string);
+
+    spacing: 0px;
+
+    for block in root.blocks: Rectangle {
+        height: block.kind == "heading"
+            ? heading.preferred-height + block.gap-before * 1px
+            : block.kind == "paragraph"
+                ? paragraph.preferred-height + block.gap-before * 1px
+                : block.kind == "bullet"
+                    ? bullet.preferred-height + block.gap-before * 1px
+                    : code-text.preferred-height + 16px + block.gap-before * 1px;
+        background: transparent;
+
+        heading := StyledText {
+            visible: block.kind == "heading";
+            y: block.gap-before * 1px;
+            width: parent.width;
+            text: block.content;
+            default-color: Tokens.ink;
+            default-font-family: "Instrument Sans";
+            default-font-size: 14.5px;
+            link-color: Tokens.accent;
+            link-clicked(link) => { root.open-url(link); }
+        }
+
+        paragraph := StyledText {
+            visible: block.kind == "paragraph";
+            y: block.gap-before * 1px;
+            width: parent.width;
+            text: block.content;
+            default-color: Tokens.ink-2;
+            default-font-family: "Instrument Sans";
+            default-font-size: 13px;
+            link-color: Tokens.accent;
+            link-clicked(link) => { root.open-url(link); }
+        }
+
+        Text {
+            visible: block.kind == "bullet";
+            y: block.gap-before * 1px;
+            width: 14px;
+            text: "•";
+            color: Tokens.ink-2;
+            font-size: 13px;
+            horizontal-alignment: center;
+        }
+        bullet := StyledText {
+            visible: block.kind == "bullet";
+            x: 14px;
+            y: block.gap-before * 1px;
+            width: parent.width - 14px;
+            text: block.content;
+            default-color: Tokens.ink-2;
+            default-font-family: "Instrument Sans";
+            default-font-size: 13px;
+            link-color: Tokens.accent;
+            link-clicked(link) => { root.open-url(link); }
+        }
+
+        Rectangle {
+            visible: block.kind == "code";
+            y: block.gap-before * 1px;
+            width: parent.width;
+            height: code-text.preferred-height + 16px;
+            border-radius: 5px;
+            border-width: 1px;
+            border-color: Tokens.line;
+            background: Tokens.inset;
+        }
+        code-text := Text {
+            visible: block.kind == "code";
+            x: 9px;
+            y: block.gap-before * 1px + 8px;
+            width: parent.width - 18px;
+            text: block.code;
+            color: Tokens.ink-2;
+            font-family: "JetBrains Mono";
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+    }
+}
+
 component ResearchReportPane inherits Rectangle {
     in property <string> agent;
     in property <string> title;
-    in property <styled-text> markdown;
+    in property <[ReportBlockRow]> blocks;
     in property <string> raw-markdown;
     in property <bool> structured: false;
     in property <[ResearchSectionRow]> sections;
@@ -1109,19 +1340,17 @@ component ResearchReportPane inherits Rectangle {
             font-weight: 680;
             wrap: word-wrap;
         }
-        report-scroll := ScrollView {
-            vertical-stretch: 1;
-            report-content := VerticalLayout {
-                width: report-scroll.width - 12px;
-                spacing: 9px;
-            if !root.structured: StyledText {
-                width: report-content.width;
-                    text: root.markdown;
-                    default-color: Tokens.ink-2;
-                    default-font-family: "Instrument Sans";
-                    default-font-size: 10.5px;
-                    link-color: Tokens.accent;
-                link-clicked(link) => { root.open-url(link); }
+            report-scroll := ScrollView {
+                vertical-stretch: 1;
+                report-content := VerticalLayout {
+                    width: root.structured
+                        ? report-scroll.visible-width - 12px
+                        : min(report-scroll.visible-width - 12px, 500px);
+                    spacing: 9px;
+                    if !root.structured: ReportBlocks {
+                        width: report-content.width;
+                        blocks: root.blocks;
+                        open-url(link) => { root.open-url(link); }
             }
             if root.structured: VerticalLayout {
                 spacing: 10px;
@@ -1256,7 +1485,7 @@ export component AppWindow inherits Window {
     in-out property <bool> research-comparative: false;
     in-out property <string> research-left-agent: "";
     in-out property <string> research-left-title: "";
-    in-out property <styled-text> research-left-markdown;
+    in-out property <[ReportBlockRow]> research-left-blocks;
     in-out property <string> research-left-raw-markdown;
     in-out property <bool> research-left-structured: false;
     in-out property <[ResearchSectionRow]> research-left-sections;
@@ -1264,7 +1493,7 @@ export component AppWindow inherits Window {
     in-out property <string> research-left-web-report: "";
     in-out property <string> research-right-agent: "";
     in-out property <string> research-right-title: "";
-    in-out property <styled-text> research-right-markdown;
+    in-out property <[ReportBlockRow]> research-right-blocks;
     in-out property <string> research-right-raw-markdown;
     in-out property <bool> research-right-structured: false;
     in-out property <[ResearchSectionRow]> research-right-sections;
@@ -1882,7 +2111,7 @@ export component AppWindow inherits Window {
                                     horizontal-stretch: 1;
                                     agent: root.research-left-agent;
                                     title: root.research-left-title;
-                                    markdown: root.research-left-markdown;
+                                    blocks: root.research-left-blocks;
                                     raw-markdown: root.research-left-raw-markdown;
                                     structured: root.research-left-structured;
                                     sections: root.research-left-sections;
@@ -1895,7 +2124,7 @@ export component AppWindow inherits Window {
                                     horizontal-stretch: 1;
                                     agent: root.research-right-agent;
                                     title: root.research-right-title;
-                                    markdown: root.research-right-markdown;
+                                    blocks: root.research-right-blocks;
                                     raw-markdown: root.research-right-raw-markdown;
                                     structured: root.research-right-structured;
                                     sections: root.research-right-sections;
@@ -1909,7 +2138,7 @@ export component AppWindow inherits Window {
                                 vertical-stretch: 1;
                                 agent: root.research-left-agent;
                                 title: root.research-left-title;
-                                markdown: root.research-left-markdown;
+                                blocks: root.research-left-blocks;
                                 raw-markdown: root.research-left-raw-markdown;
                                 structured: root.research-left-structured;
                                 sections: root.research-left-sections;

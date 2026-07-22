@@ -84,7 +84,8 @@ import -window "$desktop_window" "$shot_dir/05-personal-bridge.png"
 xdotool mousemove --window "$desktop_window" 231 143 click 1
 sleep 0.25
 import -window "$desktop_window" "$shot_dir/06-mix-collapsed.png"
-xdotool mousemove --window "$desktop_window" 1056 450 click 1
+xdotool mousemove --window "$desktop_window" 1056 450 mousedown 1 \
+  mousemove --window "$desktop_window" 990 450 mouseup 1
 sleep 0.25
 import -window "$desktop_window" "$shot_dir/07-resizable-agent-pane.png"
 xdotool mousemove --window "$desktop_window" 1125 151 click 1
@@ -93,7 +94,8 @@ import -window "$desktop_window" "$shot_dir/08-resizable-research-pane.png"
 
 # Stress the minimum supported desktop viewport with both side panels open.
 xdotool mousemove --window "$desktop_window" 1010 151 click 1
-xdotool mousemove --window "$desktop_window" 946 450 click 1
+xdotool mousemove --window "$desktop_window" 990 450 mousedown 1 \
+  mousemove --window "$desktop_window" 946 450 mouseup 1
 xdotool mousemove --window "$desktop_window" 21 143 click 1
 xdotool windowsize "$desktop_window" 1100 720
 sleep 0.5

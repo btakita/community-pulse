@@ -641,6 +641,11 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
                 id: card.id.into(),
                 topic: card.topic.into(),
                 headline: card.headline.into(),
+                headline_tooltip: source_summary_tooltip(
+                    &card.headline_source,
+                    &card.headline_summary,
+                )
+                .into(),
                 url: card.headline_url.into(),
                 sources: card.sources.join(" + ").into(),
                 score: format!("{:.1}", card.score).into(),
@@ -649,6 +654,13 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
                 } else {
                     format!("z {:+.1} ▼", card.z_score)
                 }
+                .into(),
+                z_tooltip: z_tooltip(
+                    card.z_score,
+                    card.mentions_6h,
+                    card.baseline_mean,
+                    card.baseline_stddev,
+                )
                 .into(),
                 mentions: format!(
                     "{} now · {} / 6h · {} / 24h",
@@ -757,6 +769,8 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
                     title: post.title.clone().into(),
                     url: post.url.clone().into(),
                     detail: post.published_at.format("%H:%M UTC").to_string().into(),
+                    summary: post.summary.clone().into(),
+                    summary_tooltip: source_summary_tooltip(&post.source, &post.summary).into(),
                     claude_brief_id: article_brief_id(&snapshot.research, &post.url, "claude"),
                     codex_brief_id: article_brief_id(&snapshot.research, &post.url, "codex"),
                 })
@@ -781,6 +795,13 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
             }
             .into(),
             z_score: format!("{:+.1}σ", evidence.z_score).into(),
+            z_tooltip: z_tooltip(
+                evidence.z_score,
+                evidence.mentions_6h,
+                evidence.baseline_mean,
+                evidence.baseline_stddev,
+            )
+            .into(),
             first_seen: first_seen.into(),
             source_count: source_count.to_string().into(),
             spark_line: chart.line.into(),
@@ -1078,7 +1099,7 @@ fn apply_research_selection(window: &AppWindow, reports: &[ResearchReport], id: 
 fn set_left_research(window: &AppWindow, report: &ResearchReport) {
     window.set_research_left_agent(report.agent.to_uppercase().into());
     window.set_research_left_title(report.title.clone().into());
-    window.set_research_left_markdown(styled_markdown(&report.markdown));
+    window.set_research_left_blocks(model(report_block_rows(&report.markdown)));
     window.set_research_left_raw_markdown(research_copy_text(report).into());
     window.set_research_left_web_report(report.web_report.clone().unwrap_or_default().into());
     window.set_research_left_citations(model(citation_rows(report)));
@@ -1089,7 +1110,7 @@ fn set_left_research(window: &AppWindow, report: &ResearchReport) {
 fn set_right_research(window: &AppWindow, report: &ResearchReport) {
     window.set_research_right_agent(report.agent.to_uppercase().into());
     window.set_research_right_title(report.title.clone().into());
-    window.set_research_right_markdown(styled_markdown(&report.markdown));
+    window.set_research_right_blocks(model(report_block_rows(&report.markdown)));
     window.set_research_right_raw_markdown(research_copy_text(report).into());
     window.set_research_right_web_report(report.web_report.clone().unwrap_or_default().into());
     window.set_research_right_citations(model(citation_rows(report)));
@@ -1100,7 +1121,7 @@ fn set_right_research(window: &AppWindow, report: &ResearchReport) {
 fn clear_right_research(window: &AppWindow) {
     window.set_research_right_agent("".into());
     window.set_research_right_title("".into());
-    window.set_research_right_markdown(slint::StyledText::default());
+    window.set_research_right_blocks(model(Vec::new()));
     window.set_research_right_raw_markdown("".into());
     window.set_research_right_web_report("".into());
     window.set_research_right_citations(model(Vec::new()));
@@ -1199,10 +1220,187 @@ fn markdown_lite(markdown: &str) -> String {
         .join("\n")
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ReportBlock {
+    Heading { level: u8, text: String },
+    Paragraph(String),
+    BulletList(Vec<String>),
+    Code(String),
+}
+
+fn parse_report_blocks(markdown: &str) -> Vec<ReportBlock> {
+    let lines = markdown.lines().collect::<Vec<_>>();
+    let mut blocks = Vec::new();
+    let mut index = 0;
+
+    while index < lines.len() {
+        let line = lines[index];
+        if line.trim().is_empty() {
+            index += 1;
+            continue;
+        }
+
+        if line.trim_start().starts_with("```") {
+            index += 1;
+            let mut code = Vec::new();
+            while index < lines.len() && !lines[index].trim_start().starts_with("```") {
+                code.push(lines[index]);
+                index += 1;
+            }
+            if index < lines.len() {
+                index += 1;
+            }
+            blocks.push(ReportBlock::Code(code.join("\n")));
+            continue;
+        }
+
+        if let Some((level, text)) = report_heading(line) {
+            blocks.push(ReportBlock::Heading {
+                level,
+                text: text.to_owned(),
+            });
+            index += 1;
+            continue;
+        }
+
+        if report_bullet(line).is_some() {
+            let mut items = Vec::new();
+            while index < lines.len() {
+                let Some(item) = report_bullet(lines[index]) else {
+                    break;
+                };
+                items.push(item.to_owned());
+                index += 1;
+            }
+            blocks.push(ReportBlock::BulletList(items));
+            continue;
+        }
+
+        let mut paragraph = Vec::new();
+        while index < lines.len() {
+            let candidate = lines[index];
+            if candidate.trim().is_empty()
+                || candidate.trim_start().starts_with("```")
+                || report_heading(candidate).is_some()
+                || report_bullet(candidate).is_some()
+            {
+                break;
+            }
+            paragraph.push(candidate.trim());
+            index += 1;
+        }
+        blocks.push(ReportBlock::Paragraph(paragraph.join(" ")));
+    }
+
+    blocks
+}
+
+fn report_heading(line: &str) -> Option<(u8, &str)> {
+    let line = line.trim();
+    let depth = line.bytes().take_while(|byte| *byte == b'#').count();
+    if !(1..=6).contains(&depth) || line.as_bytes().get(depth) != Some(&b' ') {
+        return None;
+    }
+    Some((depth as u8, line[depth + 1..].trim()))
+}
+
+fn report_bullet(line: &str) -> Option<&str> {
+    let line = line.trim();
+    line.strip_prefix("- ")
+        .or_else(|| line.strip_prefix("· "))
+        .map(str::trim)
+}
+
+fn report_block_rows(markdown: &str) -> Vec<ReportBlockRow> {
+    let mut rows = parse_report_blocks(markdown)
+        .into_iter()
+        .flat_map(|block| match block {
+            ReportBlock::Heading { text, .. } => vec![ReportBlockRow {
+                kind: "heading".into(),
+                content: styled_markdown(&format!("**{text}**")),
+                code: "".into(),
+                gap_before: 0.0,
+            }],
+            ReportBlock::Paragraph(text) => vec![ReportBlockRow {
+                kind: "paragraph".into(),
+                content: styled_markdown(&text),
+                code: "".into(),
+                gap_before: 0.0,
+            }],
+            ReportBlock::BulletList(items) => items
+                .into_iter()
+                .map(|text| ReportBlockRow {
+                    kind: "bullet".into(),
+                    content: styled_markdown(&text),
+                    code: "".into(),
+                    gap_before: 0.0,
+                })
+                .collect(),
+            ReportBlock::Code(code) => vec![ReportBlockRow {
+                kind: "code".into(),
+                content: slint::StyledText::default(),
+                code: code.into(),
+                gap_before: 0.0,
+            }],
+        })
+        .collect::<Vec<_>>();
+
+    for index in 1..rows.len() {
+        let previous = rows[index - 1].kind.to_string();
+        let current = rows[index].kind.as_str();
+        rows[index].gap_before = if current == "heading" {
+            18.0
+        } else if previous == "heading" {
+            6.0
+        } else if current == "bullet" && previous == "bullet" {
+            5.0
+        } else {
+            10.0
+        };
+    }
+    rows
+}
+
 fn styled_markdown(markdown: &str) -> slint::StyledText {
     let markdown = markdown_lite(markdown);
     slint::StyledText::from_markdown(&markdown)
         .unwrap_or_else(|_| slint::StyledText::from_plain_text(&markdown))
+}
+
+fn z_tooltip(z: f64, mentions_6h: usize, baseline_mean: f64, baseline_stddev: f64) -> String {
+    let band = if z >= 3.0 {
+        format!("rare: {z:.1}σ above its own weekly norm")
+    } else if z >= 2.0 {
+        "unusual: well above its typical week".to_owned()
+    } else if z >= 1.0 {
+        "elevated: above its usual range".to_owned()
+    } else if z > -1.0 {
+        "normal range for this topic".to_owned()
+    } else {
+        "cooling: below its weekly norm".to_owned()
+    };
+    let mut lines = vec![
+        format!(
+            "{mentions_6h} mentions this 6h vs typical {baseline_mean:.1} ± {baseline_stddev:.1}"
+        ),
+        band,
+    ];
+    if baseline_stddev < 1.0 {
+        lines.push("quiet topic: z uses a σ floor of 1.0".to_owned());
+    }
+    if baseline_mean < 1.0 {
+        lines.push("small baseline — z can overstate; check mentions + sources".to_owned());
+    }
+    lines.push("z compares a topic to its own history, not to other topics".to_owned());
+    lines.join("\n")
+}
+
+fn source_summary_tooltip(source: &str, summary: &str) -> String {
+    if summary.trim().is_empty() {
+        return String::new();
+    }
+    let excerpt = summary.trim().chars().take(200).collect::<String>();
+    format!("author's text · {source}\n{excerpt}")
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1328,6 +1526,11 @@ fn apply_mobile_snapshot(window: &MobileWindow, snapshot: UiSnapshot) {
                 id: card.id.into(),
                 topic: card.topic.into(),
                 headline: card.headline.into(),
+                headline_tooltip: source_summary_tooltip(
+                    &card.headline_source,
+                    &card.headline_summary,
+                )
+                .into(),
                 url: card.headline_url.into(),
                 sources: card.sources.join(" + ").into(),
                 score: format!("{:.1}", card.score).into(),
@@ -1336,6 +1539,13 @@ fn apply_mobile_snapshot(window: &MobileWindow, snapshot: UiSnapshot) {
                 } else {
                     format!("z {:+.1} ▼", card.z_score)
                 }
+                .into(),
+                z_tooltip: z_tooltip(
+                    card.z_score,
+                    card.mentions_6h,
+                    card.baseline_mean,
+                    card.baseline_stddev,
+                )
                 .into(),
                 mentions: format!(
                     "{} now · {} / 6h · {} / 24h",
@@ -1424,6 +1634,8 @@ fn apply_mobile_snapshot(window: &MobileWindow, snapshot: UiSnapshot) {
                     title: post.title.clone().into(),
                     url: post.url.clone().into(),
                     detail: post.published_at.format("%H:%M UTC").to_string().into(),
+                    summary: post.summary.clone().into(),
+                    summary_tooltip: source_summary_tooltip(&post.source, &post.summary).into(),
                     claude_brief_id: -1,
                     codex_brief_id: -1,
                 })
@@ -1448,6 +1660,13 @@ fn apply_mobile_snapshot(window: &MobileWindow, snapshot: UiSnapshot) {
             }
             .into(),
             z_score: format!("{:+.1}σ", evidence.z_score).into(),
+            z_tooltip: z_tooltip(
+                evidence.z_score,
+                evidence.mentions_6h,
+                evidence.baseline_mean,
+                evidence.baseline_stddev,
+            )
+            .into(),
             first_seen: first_seen.into(),
             source_count: source_count.to_string().into(),
             spark_line: chart.line.into(),
@@ -1618,10 +1837,11 @@ fn model<T: Clone + 'static>(values: Vec<T>) -> ModelRc<T> {
 #[cfg(test)]
 mod tests {
     use super::{
-        OpenTarget, article_brief_id, card_research_annotations, chat_artifact_link,
+        OpenTarget, ReportBlock, article_brief_id, card_research_annotations, chat_artifact_link,
         compact_result, evidence_research_rows, markdown_lite, newest_unseen_report,
-        research_copy_text, research_run_label, research_run_progress, resolve_open_target,
-        suggested_topic_rows, uses_structured_sections,
+        parse_report_blocks, research_copy_text, research_run_label, research_run_progress,
+        resolve_open_target, source_summary_tooltip, suggested_topic_rows,
+        uses_structured_sections, z_tooltip,
     };
     use crate::domain::{ResearchReport, ResearchRun, ResearchSection};
     use chrono::{Duration, Utc};
@@ -1678,6 +1898,73 @@ mod tests {
         assert!(rendered.contains("[source](https://example.com)"));
         assert!(rendered.contains("\\![ignored](x.png)"));
         slint::StyledText::from_markdown(&rendered).unwrap();
+    }
+
+    #[test]
+    fn report_markdown_parses_into_distinct_readable_blocks() {
+        let blocks = parse_report_blocks(
+            "# Finding\n\nFirst line\ncontinues here.\n\nSecond paragraph with `code`.\n\n- one\n· two\n\n```rust\nlet x = 1;\n```",
+        );
+
+        assert_eq!(
+            blocks,
+            vec![
+                ReportBlock::Heading {
+                    level: 1,
+                    text: "Finding".to_owned(),
+                },
+                ReportBlock::Paragraph("First line continues here.".to_owned()),
+                ReportBlock::Paragraph("Second paragraph with `code`.".to_owned()),
+                ReportBlock::BulletList(vec!["one".to_owned(), "two".to_owned()]),
+                ReportBlock::Code("let x = 1;".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn z_tooltip_selects_every_interpretation_band() {
+        let cases = [
+            (3.0, "rare:"),
+            (2.0, "unusual:"),
+            (1.0, "elevated:"),
+            (0.0, "normal range"),
+            (-0.9, "normal range"),
+            (-1.0, "cooling:"),
+        ];
+        for (z, expected) in cases {
+            assert!(z_tooltip(z, 12, 4.0, 2.0).contains(expected));
+        }
+    }
+
+    #[test]
+    fn z_tooltip_includes_only_applicable_caveats() {
+        let typical = z_tooltip(1.5, 12, 4.0, 2.0);
+        assert!(typical.starts_with("12 mentions this 6h vs typical 4.0 ± 2.0"));
+        assert!(!typical.contains("σ floor"));
+        assert!(!typical.contains("small baseline"));
+        assert!(typical.ends_with("z compares a topic to its own history, not to other topics"));
+
+        let quiet = z_tooltip(1.5, 12, 4.0, 0.5);
+        assert!(quiet.contains("quiet topic: z uses a σ floor of 1.0"));
+        assert!(!quiet.contains("small baseline"));
+
+        let small = z_tooltip(1.5, 12, 0.5, 2.0);
+        assert!(!small.contains("σ floor"));
+        assert!(small.contains("small baseline — z can overstate; check mentions + sources"));
+    }
+
+    #[test]
+    fn source_summary_tooltip_labels_and_bounds_author_text() {
+        assert_eq!(source_summary_tooltip("Hacker News", "   "), "");
+        assert_eq!(
+            source_summary_tooltip("Lobsters", "Written by the submitter."),
+            "author's text · Lobsters\nWritten by the submitter."
+        );
+
+        let long = "x".repeat(240);
+        let tooltip = source_summary_tooltip("Product Hunt", &long);
+        let excerpt = tooltip.split_once('\n').unwrap().1;
+        assert_eq!(excerpt.chars().count(), 200);
     }
 
     #[test]
