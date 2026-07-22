@@ -27,3 +27,10 @@ For local verification, run `make check` before committing. After local changes,
 
 Only read full source files when tsift results are insufficient.
 <!-- /tsift:code-navigation -->
+
+## Design Convergence
+
+The approved UI design lives in this repo — do not work from screenshots:
+
+- [`docs/design/mockup-desktop.html`](docs/design/mockup-desktop.html) — open in a browser; all color tokens are CSS custom properties at the top of its `<style>` block, and the "Design spec — for the Slint port" section at the bottom states metrics and component rules.
+- [`docs/design/IMPLEMENTATION.md`](docs/design/IMPLEMENTATION.md) — ordered, file:line work list: P0 correctness fixes (duplicate digest headline, hardcoded card sparklines, displayed-vs-computed math, chat tool-error history poisoning, chat state race) then P1 visual parity (bundled fonts, fader weight mapping, suggested-topic wiring, chat row truncation). Follow it top to bottom; each item has a verification step.

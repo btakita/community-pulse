@@ -1,3 +1,4 @@
+use crate::domain::MAX_BUDGET;
 use crate::tools::ToolBridge;
 use anyhow::{Context, Result, bail};
 use futures_util::StreamExt;
@@ -10,9 +11,10 @@ use std::sync::{Arc, Mutex};
 
 const SYSTEM_PROMPT: &str = r#"You are the concise host of Community Pulse.
 Use tools instead of guessing about trends or user state. Keep narration to two
-short sentences unless the user asks for detail. The digest has a hard attention
-budget of five. Explain ranking using velocity, baseline z-score, source evidence,
-and the user's explicit interests."#;
+short sentences unless the user asks for detail. The digest always has a
+user-owned attention budget, defaults to five, and never exceeds ten. Use
+set_interests to change that budget. Explain ranking using velocity, baseline
+z-score, source evidence, and the user's explicit interests."#;
 
 #[derive(Debug, Clone)]
 pub enum ChatEvent {
@@ -187,6 +189,7 @@ impl ChatSession {
         F: FnMut(ChatEvent) + Send,
     {
         let lower = user.to_lowercase();
+        let requested_budget = inferred_budget(&lower);
         let (name, arguments, narration) = if lower.contains("track") || lower.contains("subscribe")
         {
             let topic = inferred_topic(&lower).unwrap_or("wasm-runtimes");
@@ -213,7 +216,11 @@ impl ChatSession {
                 json!({ "id": topic }),
                 "The evidence view now shows recent velocity, its seven-day baseline, and the source posts behind the score.".to_owned(),
             )
-        } else if lower.contains("more ") || lower.contains("less ") || lower.contains("mute") {
+        } else if requested_budget.is_some()
+            || lower.contains("more ")
+            || lower.contains("less ")
+            || lower.contains("mute")
+        {
             let mut add = Vec::new();
             let mut remove = Vec::new();
             if lower.contains("rust") {
@@ -236,17 +243,26 @@ impl ChatSession {
             if lower.contains("ai") {
                 add.push("ai-infra");
             }
-            (
-                "set_interests",
-                json!({ "add": add, "remove": remove }),
-                "I updated the interest mixer and reranked the five-card digest immediately."
-                    .to_owned(),
-            )
+            let arguments = if let Some(budget) = requested_budget {
+                json!({ "add": add, "remove": remove, "attention_budget": budget })
+            } else {
+                json!({ "add": add, "remove": remove })
+            };
+            let narration = if let Some(budget) = requested_budget {
+                let budget = budget.clamp(1, MAX_BUDGET);
+                format!(
+                    "I set your attention budget to {budget} and reranked the pulse immediately. Evidence and source exploration stay available beyond the digest."
+                )
+            } else {
+                "I updated the interest mixer and reranked the budgeted digest immediately."
+                    .to_owned()
+            };
+            ("set_interests", arguments, narration)
         } else {
             (
                 "get_pulse",
-                json!({ "limit": 5 }),
-                "The pulse is capped at five signals. WASM and Rust are moving fastest in the fixture, with local-first and AI infrastructure close behind.".to_owned(),
+                json!({}),
+                "The pulse stays inside your attention budget. WASM and Rust are moving fastest in the fixture, with local-first and AI infrastructure close behind.".to_owned(),
             )
         };
 
@@ -276,6 +292,27 @@ fn inferred_topic(input: &str) -> Option<&'static str> {
     ]
     .into_iter()
     .find_map(|(needle, topic)| input.contains(needle).then_some(topic))
+}
+
+fn inferred_budget(input: &str) -> Option<usize> {
+    if !input.contains("budget") && !input.contains("give me") && !input.contains("show me") {
+        return None;
+    }
+    input
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .find_map(|word| match word {
+            "one" => Some(1),
+            "two" => Some(2),
+            "three" => Some(3),
+            "four" => Some(4),
+            "five" => Some(5),
+            "six" => Some(6),
+            "seven" => Some(7),
+            "eight" => Some(8),
+            "nine" => Some(9),
+            "ten" => Some(10),
+            _ => word.parse().ok(),
+        })
 }
 
 #[derive(Debug, Default)]

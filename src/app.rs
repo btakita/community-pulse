@@ -1,18 +1,46 @@
 use crate::chat::{AgentConfig, ChatEvent, ChatSession};
-use crate::domain::{ChatRole, InterestModel};
+use crate::domain::{ChatRole, InterestModel, ResearchReport, ResearchRun};
 use crate::engine::PulseEngine;
+use crate::live::{IngestController, LivePolicy, PublicFeed};
+use crate::mcp;
 use crate::reactive::UiSnapshot;
+use crate::research::{self, ResearchAgent};
+use crate::setup;
 use crate::tools::ToolBridge;
 use anyhow::Result;
-use slint::{ModelRc, SharedString, VecModel};
+use chrono::{Local, Utc};
+use slint::{ComponentHandle, ModelRc, SharedString, Timer, TimerMode, VecModel};
+use std::collections::HashSet;
 use std::fmt::Write as _;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 slint::include_modules!();
 
-pub fn run(engine: PulseEngine, replay: bool) -> Result<()> {
+thread_local! {
+    static MOBILE_CLOCK: Timer = Timer::default();
+    static DESKTOP_INGEST_CLOCK: Timer = Timer::default();
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ViewMode {
+    Desktop,
+    Mobile,
+    Companion,
+}
+
+pub fn run(
+    engine: PulseEngine,
+    replay: bool,
+    view: ViewMode,
+    mcp_port: Option<u16>,
+    fixture_mode: bool,
+    live_policy: Option<LivePolicy>,
+    agent_terminals: &[ResearchAgent],
+) -> Result<()> {
     let bridge = ToolBridge::new(engine)?;
-    bridge.get_pulse(Some(5))?;
+    let ingest_controller = IngestController::new(bridge.clone(), fixture_mode);
+    bridge.get_pulse(None)?;
     let session = if replay {
         ChatSession::replay(bridge.clone())
     } else {
@@ -29,15 +57,344 @@ pub fn run(engine: PulseEngine, replay: bool) -> Result<()> {
         }
     };
     let session = Arc::new(session);
-    let window = AppWindow::new()?;
-    apply_snapshot(&window, bridge.snapshot());
+    let desktop_window = matches!(view, ViewMode::Desktop | ViewMode::Companion)
+        .then(AppWindow::new)
+        .transpose()?;
+    let mobile_window = matches!(view, ViewMode::Mobile | ViewMode::Companion)
+        .then(MobileWindow::new)
+        .transpose()?;
+    let targets = UiTargets {
+        desktop: desktop_window.as_ref().map(ComponentHandle::as_weak),
+        mobile: mobile_window.as_ref().map(ComponentHandle::as_weak),
+    };
+    if let Some(window) = &desktop_window {
+        window.set_mcp_status(
+            mcp_port
+                .map(|port| format!("mcp ● :{port}"))
+                .unwrap_or_else(|| "mcp off".to_owned())
+                .into(),
+        );
+    }
+    render_now(&targets, &bridge);
+    if let Some(desktop_window) = &desktop_window {
+        start_desktop_ingest_clock(desktop_window, &bridge);
+        wire_desktop(
+            desktop_window,
+            &bridge,
+            &ingest_controller,
+            &session,
+            &targets,
+            mcp_port,
+        );
+    }
+    if let Some(mobile_window) = &mobile_window {
+        start_mobile_clock(mobile_window);
+        wire_mobile(mobile_window, &bridge, &session, &targets);
+    }
+    if let Some(port) = mcp_port {
+        start_mcp(bridge.clone(), targets.clone(), port);
+    }
+    for agent in agent_terminals {
+        if let Err(error) = setup::spawn_agent_terminal(*agent) {
+            eprintln!("agent terminal: {error:#}");
+        }
+    }
+    if let Some(policy) = live_policy {
+        let render_targets = targets.clone();
+        ingest_controller.start_live(
+            policy,
+            Arc::new(move |snapshot| render_later(&render_targets, snapshot)),
+        );
+    }
 
+    match (desktop_window, mobile_window) {
+        (Some(desktop), Some(mobile)) => {
+            mobile.show()?;
+            desktop.run()?;
+        }
+        (Some(desktop), None) => desktop.run()?,
+        (None, Some(mobile)) => mobile.run()?,
+        (None, None) => unreachable!("every view mode creates at least one window"),
+    }
+    Ok(())
+}
+
+fn start_mobile_clock(window: &MobileWindow) {
+    window.set_sysbar_time(Local::now().format("%H:%M").to_string().into());
+    let weak = window.as_weak();
+    MOBILE_CLOCK.with(|timer| {
+        timer.start(TimerMode::Repeated, Duration::from_secs(30), move || {
+            if let Some(window) = weak.upgrade() {
+                window.set_sysbar_time(Local::now().format("%H:%M").to_string().into());
+            }
+        });
+    });
+}
+
+fn start_desktop_ingest_clock(window: &AppWindow, bridge: &ToolBridge) {
+    let weak = window.as_weak();
+    let bridge = bridge.clone();
+    DESKTOP_INGEST_CLOCK.with(|timer| {
+        timer.start(TimerMode::Repeated, Duration::from_millis(500), move || {
+            if let Some(window) = weak.upgrade() {
+                let snapshot = bridge.snapshot();
+                window.set_ingest_label(ingest_label(&snapshot).into());
+                apply_research_run_state(&window, &snapshot);
+                window.set_research_progress_phase((window.get_research_progress_phase() + 1) % 5);
+            }
+        });
+    });
+}
+
+#[derive(Clone)]
+struct UiTargets {
+    desktop: Option<slint::Weak<AppWindow>>,
+    mobile: Option<slint::Weak<MobileWindow>>,
+}
+
+macro_rules! wire_callbacks {
+    ($window:expr, $bridge:expr, $session:expr, $targets:expr) => {{
+        {
+            let bridge = $bridge.clone();
+            let targets = $targets.clone();
+            $window.on_set_budget(move |budget| {
+                if let Err(error) = bridge.set_budget(budget.max(1) as usize) {
+                    bridge.state().append_chat(
+                        ChatRole::System,
+                        format!("Attention budget update failed: {error:#}"),
+                        None,
+                    );
+                }
+                render_now(&targets, &bridge);
+            });
+        }
+        {
+            let bridge = $bridge.clone();
+            let targets = $targets.clone();
+            $window.on_set_interest(move |topic, weight| {
+                if let Err(error) = bridge.set_interest(topic.as_str(), weight as f64) {
+                    bridge.state().append_chat(
+                        ChatRole::System,
+                        format!("Interest update failed: {error:#}"),
+                        None,
+                    );
+                }
+                render_now(&targets, &bridge);
+            });
+        }
+        {
+            let bridge = $bridge.clone();
+            let targets = $targets.clone();
+            $window.on_explain_requested(move |topic| {
+                toggle_evidence(&bridge, topic.as_str());
+                render_now(&targets, &bridge);
+            });
+        }
+        {
+            let bridge = $bridge.clone();
+            let targets = $targets.clone();
+            $window.on_clear_evidence(move || {
+                bridge.clear_evidence();
+                render_now(&targets, &bridge);
+            });
+        }
+        {
+            let bridge = $bridge.clone();
+            let targets = $targets.clone();
+            $window.on_subscribe_requested(move |topic| {
+                if let Err(error) = bridge.subscribe_topic(topic.as_str()) {
+                    bridge.state().append_chat(
+                        ChatRole::System,
+                        format!("Subscription failed: {error:#}"),
+                        None,
+                    );
+                }
+                render_now(&targets, &bridge);
+            });
+        }
+        {
+            let bridge = $bridge.clone();
+            let targets = $targets.clone();
+            $window.on_open_url(move |url| {
+                if url.is_empty() {
+                    return;
+                }
+                if let Err(error) = open::that_detached(url.as_str()) {
+                    bridge.state().append_chat(
+                        ChatRole::System,
+                        format!("Could not open source link: {error}"),
+                        None,
+                    );
+                    render_now(&targets, &bridge);
+                }
+            });
+        }
+        {
+            let bridge = $bridge.clone();
+            let session = Arc::clone($session);
+            let targets = $targets.clone();
+            $window.on_send_message(move |message| {
+                start_chat(
+                    targets.clone(),
+                    bridge.clone(),
+                    Arc::clone(&session),
+                    message.to_string(),
+                );
+            });
+        }
+    }};
+}
+
+fn wire_desktop(
+    window: &AppWindow,
+    bridge: &ToolBridge,
+    ingest_controller: &IngestController,
+    session: &Arc<ChatSession>,
+    targets: &UiTargets,
+    mcp_port: Option<u16>,
+) {
+    wire_callbacks!(window, bridge, session, targets);
+    {
+        let controller = ingest_controller.clone();
+        let targets = targets.clone();
+        window.on_refresh_requested(move || {
+            let render_targets = targets.clone();
+            controller.trigger(
+                Arc::new(PublicFeed),
+                Arc::new(move |snapshot| render_later(&render_targets, snapshot)),
+            );
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let bridge = bridge.clone();
+        window.on_select_research(move |id| {
+            if let Some(window) = weak.upgrade() {
+                window.set_research_view_active(true);
+                apply_research_selection(&window, &bridge.snapshot().research, i64::from(id));
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let bridge = bridge.clone();
+        window.on_view_research_requested(move |topic| {
+            if let Some(window) = weak.upgrade() {
+                let research = bridge.snapshot().research;
+                window.set_research_view_active(true);
+                if let Some(report) = research
+                    .iter()
+                    .find(|report| report.topic_id == topic.as_str())
+                {
+                    apply_research_selection(&window, &research, report.id);
+                } else {
+                    window.set_selected_research_id(-1);
+                }
+            }
+        });
+    }
     {
         let bridge = bridge.clone();
-        let weak = window.as_weak();
+        let targets = targets.clone();
+        window.on_research_requested(move |topic, agent| {
+            let Some(agent) = ResearchAgent::parse(agent.as_str()) else {
+                return;
+            };
+            if bridge.snapshot().research_runs.iter().any(|run| {
+                run.topic_id == topic.as_str()
+                    && run.agent.eq_ignore_ascii_case(agent.as_str())
+                    && run.status == "running"
+            }) {
+                return;
+            }
+            let Some(port) = mcp_port else {
+                let id = bridge.start_research_run(topic.as_str(), agent.as_str());
+                bridge.fail_research_run(id, "launch the app with --mcp-port to delegate research");
+                bridge.state().append_chat(
+                    ChatRole::System,
+                    "Research delegation needs `app --mcp-port <PORT>`.",
+                    None,
+                );
+                render_now(&targets, &bridge);
+                return;
+            };
+            let render_targets = targets.clone();
+            if let Err(error) = research::launch(
+                bridge.clone(),
+                topic.as_str(),
+                agent,
+                port,
+                None,
+                move |snapshot| render_later(&render_targets, snapshot),
+            ) {
+                bridge.state().append_chat(
+                    ChatRole::System,
+                    format!("Research launch failed: {error:#}"),
+                    None,
+                );
+                render_now(&targets, &bridge);
+            }
+        });
+    }
+    {
+        let bridge = bridge.clone();
+        let targets = targets.clone();
+        window.on_article_brief_requested(move |topic, article_url, agent| {
+            let Some(agent) = ResearchAgent::parse(agent.as_str()) else {
+                return;
+            };
+            if bridge.snapshot().research_runs.iter().any(|run| {
+                run.topic_id == topic.as_str()
+                    && run.agent.eq_ignore_ascii_case(agent.as_str())
+                    && run.status == "running"
+            }) {
+                return;
+            }
+            let Some(port) = mcp_port else {
+                let id = bridge.start_research_run(topic.as_str(), agent.as_str());
+                bridge.fail_research_run(id, "launch the app with MCP enabled to delegate a brief");
+                bridge.state().append_chat(
+                    ChatRole::System,
+                    "Article briefs need the in-app MCP server; relaunch without `--no-mcp`.",
+                    None,
+                );
+                render_now(&targets, &bridge);
+                return;
+            };
+            let render_targets = targets.clone();
+            if let Err(error) = research::launch_article_brief(
+                bridge.clone(),
+                topic.as_str(),
+                article_url.as_str(),
+                agent,
+                port,
+                None,
+                move |snapshot| render_later(&render_targets, snapshot),
+            ) {
+                bridge.state().append_chat(
+                    ChatRole::System,
+                    format!("Article brief launch failed: {error:#}"),
+                    None,
+                );
+                render_now(&targets, &bridge);
+            }
+        });
+    }
+}
+
+fn wire_mobile(
+    window: &MobileWindow,
+    bridge: &ToolBridge,
+    session: &Arc<ChatSession>,
+    targets: &UiTargets,
+) {
+    wire_callbacks!(window, bridge, session, targets);
+    {
+        let bridge = bridge.clone();
+        let targets = targets.clone();
         window.on_refresh_requested(move || {
             bridge.state().set_loading(true);
-            render_now(&weak, &bridge);
+            render_now(&targets, &bridge);
             let result = bridge.refresh_scores();
             bridge.state().set_loading(false);
             if let Err(error) = result {
@@ -47,75 +404,111 @@ pub fn run(engine: PulseEngine, replay: bool) -> Result<()> {
                     None,
                 );
             }
-            render_now(&weak, &bridge);
+            render_now(&targets, &bridge);
         });
     }
-    {
-        let bridge = bridge.clone();
-        let weak = window.as_weak();
-        window.on_set_interest(move |topic, weight| {
-            if let Err(error) = bridge.set_interest(topic.as_str(), weight as f64) {
-                bridge.state().append_chat(
-                    ChatRole::System,
-                    format!("Interest update failed: {error:#}"),
-                    None,
-                );
-            }
-            render_now(&weak, &bridge);
-        });
-    }
-    {
-        let bridge = bridge.clone();
-        let weak = window.as_weak();
-        window.on_explain_requested(move |topic| {
-            if let Err(error) = bridge.explain_trend(topic.as_str()) {
-                bridge.state().append_chat(
-                    ChatRole::System,
-                    format!("Evidence lookup failed: {error:#}"),
-                    None,
-                );
-            }
-            render_now(&weak, &bridge);
-        });
-    }
-    {
-        let bridge = bridge.clone();
-        let weak = window.as_weak();
-        window.on_subscribe_requested(move |topic| {
-            if let Err(error) = bridge.subscribe_topic(topic.as_str()) {
-                bridge.state().append_chat(
-                    ChatRole::System,
-                    format!("Subscription failed: {error:#}"),
-                    None,
-                );
-            }
-            render_now(&weak, &bridge);
-        });
-    }
-    {
-        let bridge = bridge.clone();
-        let session = Arc::clone(&session);
-        let weak = window.as_weak();
-        window.on_send_message(move |message| {
-            start_chat(
-                weak.clone(),
-                bridge.clone(),
-                Arc::clone(&session),
-                message.to_string(),
-            );
-        });
-    }
-
-    window.run()?;
-    Ok(())
+    let weak = window.as_weak();
+    window.on_rotate_requested(move || {
+        if let Some(window) = weak.upgrade() {
+            let landscape = !window.get_landscape();
+            window.set_landscape(landscape);
+            let size = if landscape {
+                slint::LogicalSize::new(872.0, 418.0)
+            } else {
+                slint::LogicalSize::new(418.0, 872.0)
+            };
+            window.window().set_size(size);
+        }
+    });
 }
 
-fn start_chat(
-    weak: slint::Weak<AppWindow>,
-    bridge: ToolBridge,
-    session: Arc<ChatSession>,
-    message: String,
-) {
+fn toggle_evidence(bridge: &ToolBridge, topic: &str) {
+    let selected = bridge
+        .snapshot()
+        .evidence
+        .is_some_and(|evidence| evidence.id == topic);
+    if selected {
+        bridge.clear_evidence();
+    } else if let Err(error) = bridge.explain_trend(topic) {
+        bridge.state().append_chat(
+            ChatRole::System,
+            format!("Evidence lookup failed: {error:#}"),
+            None,
+        );
+    }
+}
+
+fn start_mcp(bridge: ToolBridge, targets: UiTargets, port: u16) {
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build MCP runtime");
+        let render_targets = targets.clone();
+        let known_report_ids = Arc::new(Mutex::new(
+            bridge
+                .snapshot()
+                .research
+                .iter()
+                .map(|report| report.id)
+                .collect::<HashSet<_>>(),
+        ));
+        let result = runtime.block_on(mcp::serve(bridge.clone(), port, move |snapshot| {
+            let new_report_id = known_report_ids
+                .lock()
+                .ok()
+                .and_then(|mut known| newest_unseen_report(&mut known, &snapshot.research));
+            flash_mcp_later(&render_targets, snapshot, new_report_id);
+        }));
+        if let Err(error) = result {
+            eprintln!("mcp: unavailable on 127.0.0.1:{port} ({error:#}); app continuing");
+            set_mcp_status_later(&targets, format!("mcp ○ :{port}"));
+            render_later(&targets, bridge.snapshot());
+        }
+    });
+}
+
+fn flash_mcp_later(targets: &UiTargets, snapshot: UiSnapshot, new_report_id: Option<i64>) {
+    let targets = targets.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(window) = targets.desktop.as_ref().and_then(slint::Weak::upgrade) {
+            apply_snapshot(&window, snapshot.clone());
+            if let Some(id) = new_report_id {
+                window.set_research_view_active(true);
+                apply_research_selection(&window, &snapshot.research, id);
+            }
+            window.set_mcp_active(true);
+            let weak = window.as_weak();
+            Timer::single_shot(Duration::from_millis(900), move || {
+                if let Some(window) = weak.upgrade() {
+                    window.set_mcp_active(false);
+                }
+            });
+        }
+        if let Some(window) = targets.mobile.as_ref().and_then(slint::Weak::upgrade) {
+            apply_mobile_snapshot(&window, snapshot);
+        }
+    });
+}
+
+fn newest_unseen_report(known: &mut HashSet<i64>, reports: &[ResearchReport]) -> Option<i64> {
+    reports
+        .iter()
+        .filter_map(|report| known.insert(report.id).then_some(report.id))
+        .max()
+}
+
+fn set_mcp_status_later(targets: &UiTargets, status: String) {
+    let targets = targets.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(window) = targets.desktop.as_ref().and_then(slint::Weak::upgrade) {
+            window.set_mcp_status(status.into());
+            window.set_mcp_active(false);
+        }
+    });
+}
+
+fn start_chat(targets: UiTargets, bridge: ToolBridge, session: Arc<ChatSession>, message: String) {
     let message = message.trim().to_owned();
     if message.is_empty() || bridge.snapshot().loading {
         return;
@@ -125,7 +518,7 @@ fn start_chat(
         .append_chat(ChatRole::User, message.clone(), None);
     let assistant_id = bridge.state().append_chat(ChatRole::Assistant, "", None);
     bridge.state().set_loading(true);
-    render_now(&weak, &bridge);
+    render_now(&targets, &bridge);
 
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -141,7 +534,7 @@ fn start_chat(
                         .append_chat(ChatRole::Tool, compact_result(&result), Some(name));
                 }
             }
-            render_later(&weak, bridge.snapshot());
+            render_later(&targets, bridge.snapshot());
         }));
         if let Err(error) = result {
             bridge
@@ -149,35 +542,76 @@ fn start_chat(
                 .replace_chat(assistant_id, format!("I couldn't complete that: {error:#}"));
         }
         bridge.state().set_loading(false);
-        render_later(&weak, bridge.snapshot());
+        render_later(&targets, bridge.snapshot());
     });
 }
 
-fn render_now(weak: &slint::Weak<AppWindow>, bridge: &ToolBridge) {
-    if let Some(window) = weak.upgrade() {
-        apply_snapshot(&window, bridge.snapshot());
+fn render_now(targets: &UiTargets, bridge: &ToolBridge) {
+    let snapshot = bridge.snapshot();
+    if let Some(window) = targets.desktop.as_ref().and_then(slint::Weak::upgrade) {
+        apply_snapshot(&window, snapshot.clone());
+    }
+    if let Some(window) = targets.mobile.as_ref().and_then(slint::Weak::upgrade) {
+        apply_mobile_snapshot(&window, snapshot);
     }
 }
 
-fn render_later(weak: &slint::Weak<AppWindow>, snapshot: UiSnapshot) {
-    let weak = weak.clone();
+fn render_later(targets: &UiTargets, snapshot: UiSnapshot) {
+    let targets = targets.clone();
     let _ = slint::invoke_from_event_loop(move || {
-        if let Some(window) = weak.upgrade() {
-            apply_snapshot(&window, snapshot);
+        if let Some(window) = targets.desktop.as_ref().and_then(slint::Weak::upgrade) {
+            apply_snapshot(&window, snapshot.clone());
+        }
+        if let Some(window) = targets.mobile.as_ref().and_then(slint::Weak::upgrade) {
+            apply_mobile_snapshot(&window, snapshot);
         }
     });
 }
 
 fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
+    let busy = snapshot.loading || snapshot.ingesting;
+    apply_research_run_state(window, &snapshot);
+    window.set_ingest_label(ingest_label(&snapshot).into());
+    window.set_ingesting(snapshot.ingesting);
+    window.set_ingest_enabled(snapshot.ingest_enabled);
+    window.set_ingest_message(snapshot.ingest_message.clone().into());
+    window.set_source_statuses(model(
+        snapshot
+            .source_status
+            .iter()
+            .map(|source| SourceStatusRow {
+                name: source.name.clone().into(),
+                ok: source.ok,
+                count: source.count as i32,
+                error: source.error.clone().into(),
+            })
+            .collect(),
+    ));
+    let research_counts = snapshot.research.iter().fold(
+        std::collections::HashMap::<&str, i32>::new(),
+        |mut counts, report| {
+            if report.article_url.is_none() {
+                *counts.entry(report.topic_id.as_str()).or_default() += 1;
+            }
+            counts
+        },
+    );
+    let research_annotations = card_research_annotations(&snapshot.research);
     let digest = snapshot
         .digest
         .into_iter()
         .map(|card| {
             let chart = spark_geometry(&card.sparkline, None);
+            let research_count = research_counts
+                .get(card.id.as_str())
+                .copied()
+                .unwrap_or_default();
+            let annotation = research_annotations.get(card.id.as_str());
             DigestRow {
                 id: card.id.into(),
                 topic: card.topic.into(),
                 headline: card.headline.into(),
+                url: card.headline_url.into(),
                 sources: card.sources.join(" + ").into(),
                 score: format!("{:.1}", card.score).into(),
                 delta: if card.z_score >= 0.0 {
@@ -195,10 +629,28 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
                 spark_area: chart.area.into(),
                 spark_end_x: chart.end_x,
                 spark_end_y: chart.end_y,
+                research_count,
+                research_id: annotation
+                    .map(|report| i32::try_from(report.id).unwrap_or(i32::MAX))
+                    .unwrap_or(-1),
+                research_agent: annotation
+                    .map(|report| report.agent.to_uppercase())
+                    .unwrap_or_default()
+                    .into(),
+                research_verdict: annotation
+                    .and_then(|report| report.verdict.as_deref())
+                    .map(verdict_label)
+                    .unwrap_or_default()
+                    .into(),
+                research_summary: annotation
+                    .and_then(|report| report.summary.as_deref())
+                    .unwrap_or_default()
+                    .into(),
             }
         })
         .collect();
     window.set_digest(model(digest));
+    window.set_attention_budget(snapshot.budget as i32);
 
     let topics = topic_rows(&snapshot.interests);
     let mixer_topics = topics
@@ -206,16 +658,11 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
         .map(|topic| topic.id.to_string())
         .collect::<std::collections::HashSet<_>>();
     window.set_topics(model(topics));
-    window.set_suggested_topics(model(
-        snapshot
-            .suggested_topics
-            .iter()
-            .filter(|topic| !mixer_topics.contains(*topic))
-            .take(3)
-            .cloned()
-            .map(SharedString::from)
-            .collect(),
-    ));
+    window.set_suggested_topics(model(suggested_topic_rows(
+        &snapshot.suggested_topics,
+        &mixer_topics,
+        &snapshot.research,
+    )));
     window.set_tracked_topics(model(
         snapshot
             .tracked_topics
@@ -251,8 +698,25 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
             })
             .collect(),
     ));
-    window.set_busy(snapshot.loading);
+    window.set_busy(busy);
     window.set_status(snapshot.status.into());
+    window.set_research_reports(model(research_summary_rows(&snapshot.research)));
+    if window.get_selected_research_id() >= 0 {
+        apply_research_selection(
+            window,
+            &snapshot.research,
+            i64::from(window.get_selected_research_id()),
+        );
+    }
+
+    let evidence_topic = snapshot
+        .evidence
+        .as_ref()
+        .map(|evidence| evidence.id.as_str());
+    window.set_evidence_research(model(evidence_research_rows(
+        &snapshot.research,
+        evidence_topic,
+    )));
 
     if let Some(evidence) = snapshot.evidence {
         let chart = spark_geometry(&evidence.sparkline, Some(evidence.baseline_mean));
@@ -277,12 +741,16 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
                 .map(|post| EvidencePostRow {
                     source: post.source.clone().into(),
                     title: post.title.clone().into(),
+                    url: post.url.clone().into(),
                     detail: post.published_at.format("%H:%M UTC").to_string().into(),
+                    claude_brief_id: article_brief_id(&snapshot.research, &post.url, "claude"),
+                    codex_brief_id: article_brief_id(&snapshot.research, &post.url, "codex"),
                 })
                 .collect(),
         ));
         window.set_has_evidence(true);
         window.set_evidence(EvidenceRow {
+            id: evidence.id.into(),
             topic: evidence.topic.into(),
             mentions: evidence.mentions_6h.to_string().into(),
             baseline_value: format!("{:.1}", evidence.baseline_mean).into(),
@@ -311,6 +779,587 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
         window.set_has_evidence(false);
         window.set_evidence_posts(model(Vec::new()));
     }
+}
+
+fn card_research_annotations(
+    reports: &[ResearchReport],
+) -> std::collections::HashMap<&str, &ResearchReport> {
+    let mut newest = std::collections::HashMap::new();
+    for report in reports.iter().filter(|report| {
+        report.article_url.is_none()
+            && report
+                .summary
+                .as_deref()
+                .is_some_and(|summary| !summary.is_empty())
+    }) {
+        newest
+            .entry(report.topic_id.as_str())
+            .and_modify(|current: &mut &ResearchReport| {
+                if (report.created_at, report.id) > (current.created_at, current.id) {
+                    *current = report;
+                }
+            })
+            .or_insert(report);
+    }
+    newest
+}
+
+fn suggested_topic_rows(
+    suggested: &[String],
+    mixer_topics: &std::collections::HashSet<String>,
+    reports: &[ResearchReport],
+) -> Vec<SuggestedTopicRow> {
+    let mut seen = mixer_topics.clone();
+    let mut rows = suggested
+        .iter()
+        .filter(|topic| seen.insert((*topic).clone()))
+        .take(3)
+        .map(|topic| SuggestedTopicRow {
+            topic: topic.clone().into(),
+            agent: "trend".into(),
+            from_research: false,
+        })
+        .collect::<Vec<_>>();
+    let mut research_count = 0;
+    for report in reports {
+        if report.article_url.is_some() {
+            continue;
+        }
+        for topic in &report.watch {
+            if research_count >= 2 {
+                return rows;
+            }
+            if seen.insert(topic.clone()) {
+                rows.push(SuggestedTopicRow {
+                    topic: topic.clone().into(),
+                    agent: report.agent.to_lowercase().into(),
+                    from_research: true,
+                });
+                research_count += 1;
+            }
+        }
+    }
+    rows
+}
+
+fn evidence_research_rows(
+    reports: &[ResearchReport],
+    topic_id: Option<&str>,
+) -> Vec<ResearchTitleRow> {
+    let mut agents = std::collections::HashSet::new();
+    reports
+        .iter()
+        .filter(|report| report.article_url.is_none() && Some(report.topic_id.as_str()) == topic_id)
+        .filter(|report| agents.insert(report.agent.to_ascii_lowercase()))
+        .take(2)
+        .map(|report| ResearchTitleRow {
+            id: i32::try_from(report.id).unwrap_or(i32::MAX),
+            agent: report.agent.to_uppercase().into(),
+            title: report.title.clone().into(),
+            verdict: report
+                .verdict
+                .as_deref()
+                .map(verdict_label)
+                .unwrap_or("— unstructured")
+                .into(),
+            summary: report.summary.clone().unwrap_or_default().into(),
+        })
+        .collect()
+}
+
+fn verdict_label(verdict: &str) -> &'static str {
+    match verdict {
+        "organic" => "● organic",
+        "manufactured" => "⚠ manufactured",
+        "unclear" => "? unclear",
+        _ => "? unclear",
+    }
+}
+
+fn research_summary_rows(reports: &[ResearchReport]) -> Vec<ResearchSummaryRow> {
+    let mut reports = reports.iter().collect::<Vec<_>>();
+    reports.sort_by(|left, right| {
+        left.topic_id
+            .cmp(&right.topic_id)
+            .then_with(|| right.created_at.cmp(&left.created_at))
+    });
+    let mut previous_topic = "";
+    reports
+        .into_iter()
+        .map(|report| {
+            let group = if report.topic_id == previous_topic {
+                String::new()
+            } else {
+                previous_topic = &report.topic_id;
+                report.topic_id.replace('-', " ").to_uppercase()
+            };
+            ResearchSummaryRow {
+                id: i32::try_from(report.id).unwrap_or(i32::MAX),
+                group: group.into(),
+                agent: report.agent.to_uppercase().into(),
+                title: report.title.clone().into(),
+                age: relative_age(report.created_at).into(),
+                status: report.status.to_uppercase().into(),
+            }
+        })
+        .collect()
+}
+
+fn relative_age(created_at: chrono::DateTime<Utc>) -> String {
+    let seconds = (Utc::now() - created_at).num_seconds().max(0);
+    if seconds < 60 {
+        "now".to_owned()
+    } else if seconds < 3_600 {
+        format!("{}m", seconds / 60)
+    } else if seconds < 86_400 {
+        format!("{}h", seconds / 3_600)
+    } else {
+        format!("{}d", seconds / 86_400)
+    }
+}
+
+fn research_run_label(runs: &[ResearchRun], topic_id: Option<&str>, agent: &str) -> String {
+    let label = if agent.eq_ignore_ascii_case("claude") {
+        "Claude"
+    } else {
+        "Codex"
+    };
+    let run = latest_research_run(runs, topic_id, agent);
+    match run.map(|run| run.status.as_str()) {
+        Some("running") => format!("{label}  ·  …"),
+        Some("done") => format!("{label}  ·  ✓ {}", research_run_elapsed(run.unwrap())),
+        Some("failed") => format!("{label}  ·  ✗ {}", research_run_elapsed(run.unwrap())),
+        _ => format!("Research with {label}"),
+    }
+}
+
+fn latest_research_run<'a>(
+    runs: &'a [ResearchRun],
+    topic_id: Option<&str>,
+    agent: &str,
+) -> Option<&'a ResearchRun> {
+    topic_id.and_then(|topic_id| {
+        runs.iter()
+            .rev()
+            .find(|run| run.topic_id == topic_id && run.agent.eq_ignore_ascii_case(agent))
+    })
+}
+
+fn research_run_elapsed(run: &ResearchRun) -> String {
+    let finished_at = run.finished_at.unwrap_or_else(Utc::now);
+    let seconds = (finished_at - run.started_at).num_seconds().max(0);
+    if seconds < 3_600 {
+        format!("{:02}:{:02}", seconds / 60, seconds % 60)
+    } else {
+        format!(
+            "{}:{:02}:{:02}",
+            seconds / 3_600,
+            (seconds % 3_600) / 60,
+            seconds % 60
+        )
+    }
+}
+
+fn research_run_progress(
+    runs: &[ResearchRun],
+    topic_id: Option<&str>,
+    agent: &str,
+) -> (String, bool) {
+    let Some(run) = latest_research_run(runs, topic_id, agent) else {
+        return (String::new(), false);
+    };
+    match run.status.as_str() {
+        "running" => (
+            format!("{} · {}", research_run_elapsed(run), run.progress),
+            true,
+        ),
+        "failed" => (
+            format!(
+                "Failed · {}",
+                truncate_label(&one_line(&run.stderr_tail), 140)
+            ),
+            false,
+        ),
+        _ => (String::new(), false),
+    }
+}
+
+fn apply_research_run_state(window: &AppWindow, snapshot: &UiSnapshot) {
+    let topic_id = snapshot
+        .evidence
+        .as_ref()
+        .map(|evidence| evidence.id.as_str());
+    let (claude_progress, claude_running) =
+        research_run_progress(&snapshot.research_runs, topic_id, "claude");
+    let (codex_progress, codex_running) =
+        research_run_progress(&snapshot.research_runs, topic_id, "codex");
+    window.set_evidence_claude_status(
+        research_run_label(&snapshot.research_runs, topic_id, "claude").into(),
+    );
+    window.set_evidence_codex_status(
+        research_run_label(&snapshot.research_runs, topic_id, "codex").into(),
+    );
+    window.set_evidence_claude_progress(claude_progress.into());
+    window.set_evidence_codex_progress(codex_progress.into());
+    window.set_evidence_claude_running(claude_running);
+    window.set_evidence_codex_running(codex_running);
+}
+
+fn one_line(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn truncate_label(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let prefix = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        format!("{prefix}…")
+    } else {
+        prefix
+    }
+}
+
+fn apply_research_selection(window: &AppWindow, reports: &[ResearchReport], id: i64) {
+    let Some(selected) = reports.iter().find(|report| report.id == id) else {
+        window.set_selected_research_id(-1);
+        window.set_research_comparative(false);
+        return;
+    };
+    let claude = reports.iter().find(|report| {
+        report.topic_id == selected.topic_id
+            && report.article_url == selected.article_url
+            && report.agent.eq_ignore_ascii_case("claude")
+    });
+    let codex = reports.iter().find(|report| {
+        report.topic_id == selected.topic_id
+            && report.article_url == selected.article_url
+            && report.agent.eq_ignore_ascii_case("codex")
+    });
+    let (left, right) = match (claude, codex) {
+        (Some(claude), Some(codex)) => (claude, Some(codex)),
+        _ => (selected, None),
+    };
+
+    window.set_selected_research_id(i32::try_from(selected.id).unwrap_or(i32::MAX));
+    window.set_research_topic(
+        if selected.article_url.is_some() {
+            format!(
+                "ARTICLE BRIEF · {}",
+                selected.topic_id.replace('-', " ").to_uppercase()
+            )
+        } else {
+            selected.topic_id.replace('-', " ").to_uppercase()
+        }
+        .into(),
+    );
+    window.set_research_comparative(right.is_some());
+    set_left_research(window, left);
+    if let Some(right) = right {
+        set_right_research(window, right);
+    } else {
+        clear_right_research(window);
+    }
+}
+
+fn set_left_research(window: &AppWindow, report: &ResearchReport) {
+    window.set_research_left_agent(report.agent.to_uppercase().into());
+    window.set_research_left_title(report.title.clone().into());
+    window.set_research_left_markdown(styled_markdown(&report.markdown));
+    window.set_research_left_web_report(report.web_report.clone().unwrap_or_default().into());
+    window.set_research_left_citations(model(citation_rows(report)));
+    window.set_research_left_structured(uses_structured_sections(report));
+    window.set_research_left_sections(model(research_section_rows(report)));
+}
+
+fn set_right_research(window: &AppWindow, report: &ResearchReport) {
+    window.set_research_right_agent(report.agent.to_uppercase().into());
+    window.set_research_right_title(report.title.clone().into());
+    window.set_research_right_markdown(styled_markdown(&report.markdown));
+    window.set_research_right_web_report(report.web_report.clone().unwrap_or_default().into());
+    window.set_research_right_citations(model(citation_rows(report)));
+    window.set_research_right_structured(uses_structured_sections(report));
+    window.set_research_right_sections(model(research_section_rows(report)));
+}
+
+fn clear_right_research(window: &AppWindow) {
+    window.set_research_right_agent("".into());
+    window.set_research_right_title("".into());
+    window.set_research_right_markdown(slint::StyledText::default());
+    window.set_research_right_web_report("".into());
+    window.set_research_right_citations(model(Vec::new()));
+    window.set_research_right_structured(false);
+    window.set_research_right_sections(model(Vec::new()));
+}
+
+fn research_section_rows(report: &ResearchReport) -> Vec<ResearchSectionRow> {
+    report
+        .sections
+        .iter()
+        .map(|section| ResearchSectionRow {
+            kind: section.kind.clone().into(),
+            heading: match section.kind.as_str() {
+                "what" => "WHAT IT SAYS",
+                "substance" => "TECHNICAL SUBSTANCE",
+                "reaction" => "COMMUNITY REACTION",
+                "credibility" => "CREDIBILITY",
+                "watch" => "WHY IT MATTERS / WATCH",
+                _ => "SECTION",
+            }
+            .into(),
+            body: section.body.clone().into(),
+            quotes: model(
+                section
+                    .quotes
+                    .iter()
+                    .map(|quote| ResearchQuoteRow {
+                        text: quote.text.clone().into(),
+                        url: quote.url.clone().into(),
+                        author: quote.author.clone().unwrap_or_default().into(),
+                    })
+                    .collect(),
+            ),
+        })
+        .collect()
+}
+
+fn article_brief_id(reports: &[ResearchReport], article_url: &str, agent: &str) -> i32 {
+    reports
+        .iter()
+        .find(|report| {
+            report.article_url.as_deref() == Some(article_url)
+                && report.agent.eq_ignore_ascii_case(agent)
+        })
+        .map(|report| i32::try_from(report.id).unwrap_or(i32::MAX))
+        .unwrap_or(-1)
+}
+
+fn uses_structured_sections(report: &ResearchReport) -> bool {
+    !report.sections.is_empty()
+}
+
+fn citation_rows(report: &ResearchReport) -> Vec<CitationRow> {
+    report
+        .citations
+        .iter()
+        .enumerate()
+        .map(|(index, citation)| CitationRow {
+            label: format!("SOURCE {}", index + 1).into(),
+            url: citation.url.clone().into(),
+            note: citation.note.clone().unwrap_or_default().into(),
+        })
+        .collect()
+}
+
+fn markdown_lite(markdown: &str) -> String {
+    markdown
+        .lines()
+        .map(|line| {
+            let escaped = line
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;");
+            if let Some(heading) = escaped.strip_prefix("# ") {
+                format!("<u>**{heading}**</u>")
+            } else if let Some(heading) = escaped.strip_prefix("## ") {
+                format!("**{heading}**")
+            } else if escaped.starts_with("![")
+                || escaped.starts_with('|')
+                || escaped.starts_with("```")
+                || line.starts_with("  - ")
+            {
+                format!("\\{escaped}")
+            } else {
+                escaped
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn styled_markdown(markdown: &str) -> slint::StyledText {
+    let markdown = markdown_lite(markdown);
+    slint::StyledText::from_markdown(&markdown)
+        .unwrap_or_else(|_| slint::StyledText::from_plain_text(&markdown))
+}
+
+fn apply_mobile_snapshot(window: &MobileWindow, snapshot: UiSnapshot) {
+    let digest = snapshot
+        .digest
+        .into_iter()
+        .map(|card| {
+            let chart = spark_geometry(&card.sparkline, None);
+            DigestRow {
+                id: card.id.into(),
+                topic: card.topic.into(),
+                headline: card.headline.into(),
+                url: card.headline_url.into(),
+                sources: card.sources.join(" + ").into(),
+                score: format!("{:.1}", card.score).into(),
+                delta: if card.z_score >= 0.0 {
+                    format!("z {:+.1} ▲", card.z_score)
+                } else {
+                    format!("z {:+.1} ▼", card.z_score)
+                }
+                .into(),
+                mentions: format!(
+                    "{} now · {} / 6h · {} / 24h",
+                    card.mentions_1h, card.mentions_6h, card.mentions_24h
+                )
+                .into(),
+                spark_line: chart.line.into(),
+                spark_area: chart.area.into(),
+                spark_end_x: chart.end_x,
+                spark_end_y: chart.end_y,
+                research_count: 0,
+                research_id: -1,
+                research_agent: "".into(),
+                research_verdict: "".into(),
+                research_summary: "".into(),
+            }
+        })
+        .collect();
+    window.set_digest(model(digest));
+    window.set_attention_budget(snapshot.budget as i32);
+
+    let topics = topic_rows(&snapshot.interests);
+    let mixer_topics = topics
+        .iter()
+        .map(|topic| topic.id.to_string())
+        .collect::<std::collections::HashSet<_>>();
+    window.set_topics(model(topics));
+    window.set_suggested_topics(model(
+        snapshot
+            .suggested_topics
+            .iter()
+            .filter(|topic| !mixer_topics.contains(*topic))
+            .take(3)
+            .cloned()
+            .map(SharedString::from)
+            .collect(),
+    ));
+    window.set_tracked_topics(model(
+        snapshot
+            .tracked_topics
+            .iter()
+            .cloned()
+            .map(SharedString::from)
+            .collect(),
+    ));
+    window.set_suggested_prompts(model(vec![
+        "What's moving?".into(),
+        "More Rust".into(),
+        "Why?".into(),
+    ]));
+    window.set_delta_chips(model(
+        snapshot
+            .delta_chips
+            .iter()
+            .cloned()
+            .map(SharedString::from)
+            .collect(),
+    ));
+    window.set_alert(snapshot.alert.into());
+    window.set_chat(model(
+        snapshot
+            .chat
+            .into_iter()
+            .map(|message| ChatRow {
+                role: match message.role {
+                    ChatRole::User => "YOU",
+                    ChatRole::Assistant => "PULSE",
+                    ChatRole::Tool => "TOOL",
+                    ChatRole::System => "SYSTEM",
+                }
+                .into(),
+                body: message.body.into(),
+                tool: message.tool.unwrap_or_default().into(),
+            })
+            .collect(),
+    ));
+    window.set_busy(snapshot.loading || snapshot.ingesting);
+    window.set_status(snapshot.status.into());
+
+    if let Some(evidence) = snapshot.evidence {
+        let chart = spark_geometry(&evidence.sparkline, Some(evidence.baseline_mean));
+        let first_seen = evidence
+            .posts
+            .iter()
+            .map(|post| post.published_at)
+            .min()
+            .map(|timestamp| timestamp.format("%H:%M").to_string())
+            .unwrap_or_else(|| "—".to_owned());
+        let source_count = evidence
+            .posts
+            .iter()
+            .map(|post| post.source.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        window.set_evidence_posts(model(
+            evidence
+                .posts
+                .iter()
+                .take(3)
+                .map(|post| EvidencePostRow {
+                    source: post.source.clone().into(),
+                    title: post.title.clone().into(),
+                    url: post.url.clone().into(),
+                    detail: post.published_at.format("%H:%M UTC").to_string().into(),
+                    claude_brief_id: -1,
+                    codex_brief_id: -1,
+                })
+                .collect(),
+        ));
+        window.set_has_evidence(true);
+        window.set_evidence(EvidenceRow {
+            id: evidence.id.into(),
+            topic: evidence.topic.into(),
+            mentions: evidence.mentions_6h.to_string().into(),
+            baseline_value: format!("{:.1}", evidence.baseline_mean).into(),
+            baseline: if evidence.baseline_stddev < 1.0 {
+                format!(
+                    "baseline μ {:.1} · σ {:.1} · z floors σ at 1.0",
+                    evidence.baseline_mean, evidence.baseline_stddev
+                )
+            } else {
+                format!(
+                    "baseline μ {:.1} · σ {:.1}",
+                    evidence.baseline_mean, evidence.baseline_stddev
+                )
+            }
+            .into(),
+            z_score: format!("{:+.1}σ", evidence.z_score).into(),
+            first_seen: first_seen.into(),
+            source_count: source_count.to_string().into(),
+            spark_line: chart.line.into(),
+            spark_area: chart.area.into(),
+            spark_end_x: chart.end_x,
+            spark_end_y: chart.end_y,
+            baseline_y: chart.baseline_y,
+        });
+    } else {
+        window.set_has_evidence(false);
+        window.set_evidence_posts(model(Vec::new()));
+    }
+}
+
+fn ingest_label(snapshot: &UiSnapshot) -> String {
+    if snapshot.ingesting {
+        return "now".to_owned();
+    }
+    snapshot
+        .last_ingest_at
+        .map(|timestamp| {
+            let seconds = Utc::now()
+                .signed_duration_since(timestamp)
+                .num_seconds()
+                .max(0);
+            if seconds < 60 {
+                format!("{seconds}s ago")
+            } else {
+                format!("{}m ago", seconds / 60)
+            }
+        })
+        .unwrap_or_else(|| "ready".to_owned())
 }
 
 fn topic_rows(interests: &InterestModel) -> Vec<TopicRow> {
@@ -448,14 +1497,182 @@ fn model<T: Clone + 'static>(values: Vec<T>) -> ModelRc<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::compact_result;
+    use super::{
+        article_brief_id, card_research_annotations, compact_result, evidence_research_rows,
+        markdown_lite, newest_unseen_report, research_run_label, research_run_progress,
+        suggested_topic_rows, uses_structured_sections,
+    };
+    use crate::domain::{ResearchReport, ResearchRun, ResearchSection};
+    use chrono::{Duration, Utc};
     use serde_json::json;
+    use std::collections::HashSet;
+
+    fn report(
+        id: i64,
+        topic: &str,
+        agent: &str,
+        verdict: &str,
+        summary: &str,
+        watch: &[&str],
+        age_minutes: i64,
+    ) -> ResearchReport {
+        ResearchReport {
+            id,
+            topic_id: topic.to_owned(),
+            agent: agent.to_owned(),
+            title: format!("{agent} report"),
+            markdown: "Finding".to_owned(),
+            citations: vec![],
+            web_report: None,
+            article_url: None,
+            sections: vec![],
+            verdict: Some(verdict.to_owned()),
+            summary: Some(summary.to_owned()),
+            watch: watch.iter().map(|topic| (*topic).to_owned()).collect(),
+            created_at: Utc::now() - Duration::minutes(age_minutes),
+            status: "submitted".to_owned(),
+        }
+    }
 
     #[test]
     fn compact_tool_errors_keep_the_failure_visible() {
         assert_eq!(
             compact_result(&json!({ "error": "unknown trend: nope" })),
             "tool failed: unknown trend: nope"
+        );
+    }
+
+    #[test]
+    fn markdown_lite_keeps_supported_inline_markup_and_normalizes_headings() {
+        let rendered = markdown_lite(
+            "# Finding\n## Detail\n- **organic** spike with `code` and [source](https://example.com)\n![ignored](x.png)",
+        );
+
+        assert!(rendered.contains("<u>**Finding**</u>"));
+        assert!(rendered.contains("**Detail**"));
+        assert!(rendered.contains("- **organic** spike with `code`"));
+        assert!(rendered.contains("[source](https://example.com)"));
+        assert!(rendered.contains("\\![ignored](x.png)"));
+    }
+
+    #[test]
+    fn card_annotation_uses_the_newest_structured_report() {
+        let reports = vec![
+            report(1, "rust", "claude", "unclear", "Older", &[], 20),
+            report(2, "rust", "codex", "organic", "Newest", &[], 1),
+        ];
+        let annotations = card_research_annotations(&reports);
+        assert_eq!(annotations["rust"].id, 2);
+        assert_eq!(annotations["rust"].summary.as_deref(), Some("Newest"));
+    }
+
+    #[test]
+    fn evidence_keeps_both_agents_verdicts_side_by_side() {
+        let reports = vec![
+            report(1, "rust", "claude", "organic", "Diverse", &[], 1),
+            report(2, "rust", "codex", "manufactured", "Narrow", &[], 2),
+        ];
+        let rows = evidence_research_rows(&reports, Some("rust"));
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].verdict.as_str(), "● organic");
+        assert_eq!(rows[1].verdict.as_str(), "⚠ manufactured");
+    }
+
+    #[test]
+    fn research_watch_suggestions_are_provenanced_and_capped_at_two() {
+        let reports = vec![
+            report(
+                1,
+                "rust",
+                "claude",
+                "organic",
+                "Diverse",
+                &["watch-a", "watch-b", "watch-c"],
+                1,
+            ),
+            report(2, "rust", "codex", "unclear", "Mixed", &["watch-d"], 2),
+        ];
+        let suggested = vec![
+            "trend-a".to_owned(),
+            "trend-b".to_owned(),
+            "trend-c".to_owned(),
+        ];
+        let rows = suggested_topic_rows(&suggested, &HashSet::new(), &reports);
+        assert_eq!(rows.len(), 5);
+        assert!(rows[..3].iter().all(|row| !row.from_research));
+        assert_eq!(rows.iter().filter(|row| row.from_research).count(), 2);
+        assert_eq!(rows[3].agent.as_str(), "claude");
+    }
+
+    #[test]
+    fn article_briefs_are_badged_but_do_not_enrich_topic_cards() {
+        let mut brief = report(
+            7,
+            "rust",
+            "claude",
+            "manufactured",
+            "Article-only summary",
+            &["article-only-watch"],
+            1,
+        );
+        brief.article_url = Some("https://example.com/article".to_owned());
+        brief.sections = vec![ResearchSection {
+            kind: "what".to_owned(),
+            body: "A native section".to_owned(),
+            quotes: vec![],
+        }];
+
+        assert_eq!(
+            article_brief_id(&[brief.clone()], "https://example.com/article", "claude"),
+            7
+        );
+        assert!(uses_structured_sections(&brief));
+        assert!(card_research_annotations(&[brief.clone()]).is_empty());
+        assert!(evidence_research_rows(&[brief.clone()], Some("rust")).is_empty());
+        assert!(suggested_topic_rows(&[], &HashSet::new(), &[brief.clone()]).is_empty());
+
+        brief.sections.clear();
+        assert!(!uses_structured_sections(&brief));
+    }
+
+    #[test]
+    fn mcp_submission_focuses_only_a_new_report() {
+        let reports = vec![
+            report(2, "rust", "codex", "organic", "Newest", &[], 1),
+            report(1, "rust", "claude", "unclear", "Existing", &[], 2),
+        ];
+        let mut known = HashSet::from([1]);
+        assert_eq!(newest_unseen_report(&mut known, &reports), Some(2));
+        assert_eq!(newest_unseen_report(&mut known, &reports), None);
+    }
+
+    #[test]
+    fn research_progress_exposes_activity_failure_and_final_duration() {
+        let started_at = Utc::now() - Duration::seconds(42);
+        let mut run = ResearchRun {
+            id: 1,
+            topic_id: "rust".to_owned(),
+            agent: "claude".to_owned(),
+            status: "running".to_owned(),
+            started_at,
+            finished_at: None,
+            progress: "Reading source posts".to_owned(),
+            stderr_tail: String::new(),
+        };
+
+        let (progress, running) = research_run_progress(&[run.clone()], Some("rust"), "claude");
+        assert!(running);
+        assert!(progress.ends_with("Reading source posts"));
+
+        run.status = "failed".to_owned();
+        run.finished_at = Some(started_at + Duration::seconds(47));
+        run.stderr_tail = "permission denied for pulse MCP".to_owned();
+        let (progress, running) = research_run_progress(&[run.clone()], Some("rust"), "claude");
+        assert!(!running);
+        assert_eq!(progress, "Failed · permission denied for pulse MCP");
+        assert_eq!(
+            research_run_label(&[run], Some("rust"), "claude"),
+            "Claude  ·  ✗ 00:47"
         );
     }
 }

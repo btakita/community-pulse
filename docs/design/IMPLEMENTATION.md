@@ -21,12 +21,10 @@ Feature plans in this directory:
   endpoint (streamable HTTP) so Claude Code/Codex/OpenCode drive the same
   ToolBridge and the UI updates live. Read its architecture-decision
   section before writing any code: in-process HTTP, never a stdio child.
-- [`research-interface-plan.md`](research-interface-plan.md) — **next up**:
-  agentic research over live data. Five new tools incl. `submit_research`
-  write-back, Research drawer UI, CLI delegation to the user's
-  `claude`/`codex` accounts, live-ingest loop. Start at its
-  "Execution guide" section — phases R1→R4 with code anchors, pinned
-  decisions, and per-phase acceptance gates.
+- [`research-interface-plan.md`](research-interface-plan.md) — R1→R4 baseline is
+implemented and locally verified. The ordered startup, ingest, enrichment, and
+article-brief follow-ons are also implemented; its status section records the
+remaining human review and mobile/R5 deferrals.
 
 ## P0 — correctness (do these first)
 
@@ -197,6 +195,9 @@ of the app).
 
 ## User-adjustable attention budget (master fader)
 
+Status: **implemented and automated**; the presentation-machine sequence below
+remains a human rehearsal check.
+
 Refined invariant: **a budget always exists, the user owns it, and
 unbounded is never the default.** The digest cap becomes user-adjustable
 within an engine-enforced ceiling; research depth stays pull-based
@@ -229,6 +230,50 @@ within an engine-enforced ceiling; research depth stays pull-based
    limit honors stored budget; clamp at 10 (a request for 50 via MCP
    returns 10 and `isError: false` — clamping is policy, not an error);
    meter shows `count/budget`; digest re-ranks immediately on change.
+
+## In-app ingest (~half day)
+
+Status: **implemented** through the shared manual/live controller with
+controller-level stub tests and snapshot/restore coverage.
+
+Bring `pulse ingest` into the UI so fresh data is one click, not a CLI
+round-trip. Build it as a shared `IngestController` that BOTH the UI
+trigger and R4's `--live` timer call — one code path, two triggers.
+
+1. **Controller (Rust)**: async task per the `start_chat` thread pattern:
+   `ingest::fetch_all()` → `engine.ingest()` per source → `recompute` →
+   refresh digest/suggested cells → render. Enforce the **politeness
+   floor here** (shared const, min 120s between runs regardless of
+   trigger — UI click, timer, anything); a too-soon request returns the
+   remaining cooldown instead of fetching.
+2. **State**: `ingesting: Source<bool>`, `last_ingest_at:
+   Source<Option<DateTime>>`, and `source_status:
+   Source<Vec<SourceStatus { name, ok, count, error }>>` filled from
+   `fetch_all`'s per-source results.
+3. **UI (desktop)**:
+   - The header "ingest Ns ago" readout becomes the live trigger: shows
+     real elapsed time (tick it with the existing sysbar timer), click →
+     spinner while running, then flash the result ("+34 posts").
+   - Status-bar source dots go live: green ✓ per succeeded source, red
+     with the error text (elided) on failure. Per-source failure is
+     non-fatal — ingest what succeeded.
+   - Cooldown feedback: clicking during the floor shows "next ingest in
+     Ns" instead of silently ignoring.
+4. **Fixture guard**: in `--fixture` mode the trigger is disabled with
+   hint "fixture mode — ingest off". Mixing live posts into the
+   deterministic snapshot would poison demo reproducibility; protect it.
+5. **Digest continuity**: after ingest, delta chips fire naturally from
+   the snapshot comparison — that's the payoff moment (click ingest →
+   "2 new · rust cooled" appears). Make sure the previous-snapshot
+   capture happens BEFORE the recompute so the chips are truthful.
+6. **Not in scope**: exposing ingest as an MCP/chat tool (agents get
+   fresh-enough data via the floor + timer; revisit later), and mobile
+   pull-to-refresh (deferred with mobile parity — it becomes a second
+   trigger on the same controller).
+7. **Tests**: cooldown floor honored across triggers; per-source failure
+   leaves other sources' posts ingested; fixture mode disables; the
+   engine-level flow is already covered — add controller-level tests
+   with a stub ingester, not network tests.
 
 ## Explicit non-goals (don't spend time here)
 

@@ -36,6 +36,8 @@ The source cells are:
 - weighted interests
 - selected evidence
 - tracked and suggested topics
+- research reports and per-agent run state
+- ingest lifecycle, last-success time, and per-source status
 - chat transcript and loading state
 
 The status string is a computed node that reads digest, interests, and tracked
@@ -60,9 +62,21 @@ When a turn contains tool calls, the adapter:
 The loop is capped at four rounds. The replay adapter invokes the identical
 bridge and emits the same event types.
 
+Installed Claude/Codex research runs are separate, user-initiated processes.
+They read the same nine-tool bridge through localhost MCP and finish by calling
+`submit_research`; the report write marks the matching run done and publishes a
+new snapshot. No provider credential crosses into Pulse.
+
+`IngestController` is the single freshness boundary for the desktop action and
+the live timer. It reserves the shared 120-second gate before network work,
+accepts partial source success, recomputes once, and publishes source health,
+digest deltas, and tracked alerts together.
+
 ## Persistence
 
 SQLite stores normalized posts, many-to-many topic mentions, immutable score
-snapshots, interest weights, and subscriptions. WAL mode permits inspection
-while the app is open. The fixture intentionally clears only its selected
-database so repeated rehearsals are deterministic.
+snapshots, interest weights, subscriptions, and attributed research reports.
+WAL mode permits inspection while the app is open. `pulse snapshot` uses
+SQLite's consistent-copy path so a live database can become a standalone demo
+fallback. The fixture intentionally clears only its selected database so
+repeated rehearsals are deterministic.

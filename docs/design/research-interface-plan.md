@@ -12,6 +12,43 @@ subscription auth themselves. This supersedes the "keep the tool surface
 at four" note in mcp-integration-plan.md — research adds tools
 deliberately.
 
+## Implementation status (2026-07-22)
+
+- [x] R1-lite and full R1: report storage/reactive write-back plus all five
+research tools; MCP exposes exactly nine shared tools.
+- [x] R2 desktop-first: Research drawer, report/comparison panes, markdown-lite,
+citations/outbound links, card counts, and expanded-evidence entry.
+- [x] R3: Claude/Codex evidence actions, concurrent run state, doctor, checked-in
+prompt, web-report guardrails, and an account-free fake-CLI HTTP round trip.
+- [x] R4: shared manual/live ingest controller, 120-second floor, failure
+backoff, partial-source success, live state refresh, and tested SQLite snapshot
+restore.
+- [x] Follow-on queue: zero-ritual startup/setup/agent terminals, structured
+verdict/summary/watch enrichment, and user-initiated article briefs with native
+sections plus markdown fallback.
+- [ ] Needs human review: real subscription logins/quota, presentation-machine
+doctor, live-provider timing, and final fallback assets. These are rehearsal,
+not code blockers.
+- [ ] Intentionally deferred: mobile research parity and its bundled companion/
+i3 floating-rule pass; optional R5 remote client.
+
+## Punch: report view renders plain text — implement markdown-lite (operator feedback)
+
+The shipped report view shows raw markdown as plain text. Implement the
+R2 renderer as specced: parse the subset — `#`/`##` headings, `**bold**`,
+`- ` bullets, `[text](url)` links, `` `code` `` spans — into block-level
+Slint elements (heading rows, bullet rows with markers, paragraphs).
+Inline links: style them accent + underline; make the tappable target
+work within Slint's inline limits — if true inline tap regions fight
+back, render each paragraph's links as small link chips directly under
+that paragraph (url via the existing open-url path) rather than
+shipping untappable styled text. Everything outside the subset renders
+as plain text — no tables/images/nesting. The structured-sections
+native view (follow-on) supersedes this for article briefs; markdown-
+lite remains the path for topic reports and the fallback for
+unstructured submissions. Test: a fixture report exercising every
+subset feature renders with correct hierarchy and all links open.
+
 ## Phase R1 — Research tools + write-back storage (~1 day)
 
 New MCP/bridge tools (same ToolBridge pattern; chat gets them too):
@@ -108,7 +145,8 @@ first-party surfaces (compliant), and gives the agents local-data access
 (filesystem, local MCP) that no remote API call could have.
 
 - Spawn pattern (no API keys in pulse; auth lives in each harness):
-  - Claude: `claude -p "<prompt>" --permission-mode acceptEdits` headless
+- Claude: `claude --model opus -p "<prompt>" --permission-mode acceptEdits`
+headless (Opus is the explicit default for delegated research)
     run with the pulse MCP server registered (one-time:
     `claude mcp add --transport http pulse http://127.0.0.1:<port>/mcp`).
   - Codex: `codex exec "<prompt>"` with pulse registered in
@@ -131,6 +169,175 @@ first-party surfaces (compliant), and gives the agents local-data access
 - Preflight doctor: `pulse research doctor` checks `claude --version` /
   `codex --version` on PATH, MCP registration, and endpoint reachability;
   prints the fix commands. Run it in demo prep, not on stage.
+
+## Research-driven UI enrichment (follow-on to R2/R3)
+
+Reports must not be dead-ends behind a drawer — structured findings feed
+the live surfaces. Pinned principle: **research annotates, it never
+re-ranks.** The score math stays transparent (velocity/z/interest only);
+research changes what the user SEES about a trend, not where it sits.
+If an agent concludes a spike is manufactured, the user sees the flag
+and decides — the formula is never silently overridden.
+
+1. **Structured fields on `submit_research`** (all optional, so plain
+   markdown reports keep working):
+   - `verdict`: `"organic" | "manufactured" | "unclear"` — spike
+     authenticity assessment.
+   - `summary`: one sentence, ≤140 chars — the card-level insight.
+   - `watch`: up to 3 suggested topic slugs ("what to watch next").
+   Persist on `ResearchReport`; update the tool description and the R3
+   prompt template so agents reliably fill them.
+2. **Digest card research strip**: cards whose topic has research gain a
+   compact strip under the meta row: agent badge (claude/codex) +
+   verdict glyph (● organic / ⚠ manufactured / ? unclear) + the summary
+   sentence in ink-2. Newest report wins the strip; the drawer holds
+   history. Click → opens the report.
+3. **Evidence panel**: verdict + summary shown prominently above the
+   posts; with reports from both agents, show both verdicts side by
+   side (agreement/disagreement is signal — and the comparative demo
+   beat in miniature).
+4. **Suggested channels with provenance**: `watch` topics flow into the
+   composer's suggested chips, marked with a tiny agent glyph ("from
+   research"). Clicking adds the channel as usual. Cap: research may
+   contribute at most 2 of the visible suggested chips — trend-derived
+   suggestions keep priority.
+5. **Alert hook**: a `manufactured` verdict on a topic the user tracks
+   fires the existing tracked-alert banner ("research flags <topic> as
+   manufactured — tap to read"). Reuses the alert cell; no new
+   notification machinery.
+6. **Live update path is already free**: all of this renders from the
+   `research` cell that `submit_research` writes, so a report landing
+   mid-demo updates cards/evidence/chips in real time in every open
+   window.
+7. **Tests**: structured fields round-trip; card strip shows newest
+   report; verdict-disagreement renders both; `watch` chips capped at 2;
+   ranking unchanged by any research content (assert digest order is
+   identical before/after submit_research — the annotates-never-reranks
+   invariant as a test).
+
+## Article-level briefs (deep-dive per post)
+
+Topic research answers "why is this trending?"; article briefs answer
+"what does THIS post actually say, and what is the community making of
+it?" — the agent reads one article + its comment thread and produces a
+rich brief, ideally as an artifact.
+
+1. **Scope on `submit_research`**: optional `article_url: string`. When
+   present, the report is an **article brief** anchored to the matching
+   evidence post (match by url against the topic's posts; unmatched →
+   store as topic-level with a warning in the tool result). Article
+   briefs NEVER feed the card verdict strip or suggested chips — those
+   stay topic-scoped; a brief annotates its post row only.
+2. **UI entry**: each evidence post row gains a small "brief" action
+   (agent picker like the topic-level Research buttons). After
+   submission the row shows a brief badge (agent glyph + 📄); click →
+   report view, and "Open web report ↗" when an artifact/HTML exists.
+3. **Prompt template** (`docs/article-brief-prompt.md`): read the
+   article at <url> AND its discussion thread (HN/lobste.rs comments —
+   the url is the thread for self posts; fetch both when distinct).
+   Produce: (a) what it announces/argues in plain words, (b) the
+   technical substance worth knowing, (c) the community's reaction —
+   top substantive threads, notable disagreements, (d) credibility
+   notes (author, prior art, marketing tells), (e) why it's driving the
+   trend. In-app: ≤140-char `summary` + the markdown body. Rich
+   version: **Claude publishes it as an Artifact** (self-contained HTML
+   brief — charts/pull-quotes welcome) and passes the URL in
+   `web_report`; **Codex writes the HTML file** into `research/reports/`
+   per the web-report rules. Existing web_report guardrails apply
+   unchanged.
+   **Direct links are mandatory, not decorative**: every claim and
+   pull-quote in the brief links to its exact source location — section
+   anchors within the article when the page has heading ids
+   (`url#anchor`), and per-comment permalinks for reaction claims (HN:
+   `item?id=<comment-id>`; lobste.rs comment anchors). The `citations`
+   array carries these deep URLs (not just the article root), so the
+   in-app citation list and the artifact both route the reader to the
+   precise paragraph/comment. Template instructs the agent: "no
+   unlinked claims — if you can't link it, mark it as your inference."
+4. **Demo beat this creates**: expand a card → click "brief" on the HN
+   post → agent reads the thread live → badge appears on the row →
+   open the artifact in the browser. The artifact is shareable
+   afterward — a natural "and here's the one it wrote earlier" backup
+   asset for the call (pre-generate one during rehearsal).
+5. **Costs**: article briefs are the most token-hungry research unit
+   (full thread reads) — user-initiated only, same as all delegation;
+   one brief per click, no batch "brief everything" button.
+6. **Native in-app brief view (structured sections, not embedded HTML)**.
+   Slint has no webview and must not grow one; instead the agent submits
+   structure and the app renders native components:
+   - `submit_research` optional `sections: [{ kind: "what" | "substance"
+     | "reaction" | "credibility" | "watch", body, quotes: [{ text, url,
+     author? }] }]` mirroring the template's five sections. When
+     `sections` is present the in-app view renders natively; the
+     markdown body remains the fallback for unstructured reports.
+   - Native rendering: section headers as mono eyebrows; `quotes` as
+     styled pull-quote blocks with an author chip and a deep-link glyph
+     (tap → open-url to the exact comment/anchor); the reaction section
+     renders quotes as mini comment-cards (author · source · link).
+   - The evidence panel's brief badge opens THIS native view first;
+     "Open web report ↗" remains the escalation to the rich artifact.
+     (Same content, two fidelities: native = fast in-demo reading,
+     artifact = shareable rich version.)
+   - Prompt template addendum: always fill `sections` AND the markdown
+     body (markdown is the durable/portable copy; sections are the UI
+     copy). Quote text ≤280 chars each, ≤3 quotes per section.
+   - Tests: sections round-trip; missing sections → markdown fallback
+     renders; every quote url passes the citation guardrails.
+
+## Live chat: API for the demo; CLI-backed chat as optional follow-on
+
+**Demo decision (pinned):** the in-app chat panel runs on the existing
+API path (`ChatSession::live`, BYOK via `PULSE_API_KEY` /
+`PULSE_API_BASE` / `PULSE_MODEL`), NOT on local CLIs. Rationale: it
+exists, streams token-by-token with the nine-tool loop, and per-turn CLI
+startup latency reads badly in a conversational panel. Rehearsal items:
+set the key in `.env`, verify the configured model id is current with
+the provider, run one full tool-loop conversation live, confirm
+`--replay` fallback still engages when the key is absent.
+
+Demo narrative bonus: chat on a metered API key + research buttons on
+subscription CLIs + the interactive Claude terminal over MCP = all
+billing tiers of the brief visible in one demo, one tool surface.
+
+**Optional follow-on — CLI-backed chat mode** (`app --chat-agent
+claude|codex`, ~1 day, do NOT build before the panel):
+- Each user turn → headless run (`claude -p --resume <session-id>
+  --output-format stream-json`, or `codex exec` resume equivalent);
+  parse stream-json for text deltas into the existing chat cell.
+- Tool calls need no parsing: the CLI agent uses the app's own MCP
+  endpoint, so tool chips derive from MCP-side call events and the UI
+  updates via shared state like any external agent.
+- Show a per-turn "thinking" state to absorb CLI startup latency; keep
+  the API path as the default; subscription auth prerequisites are the
+  same as R3 (doctor + warm-up).
+- Value: in-app conversation billed to the user's subscription with no
+  API key — tier 1 ergonomics inside the app. Product-relevant, not
+  demo-relevant.
+
+## Agent terminal lifecycle (bug) + in-app console direction
+
+**Bug (operator observed): each app instance spawns an extra external
+terminal and they accumulate.** Fix the `--agent-terminal` lifecycle:
+
+1. Reuse before spawn: write a pidfile (`$XDG_RUNTIME_DIR/pulse-agent-
+   term.pid`); on launch, if the pid is alive, do NOT spawn another.
+2. Reap on exit: the spawned terminal is a child of the app for
+   lifecycle purposes — terminate it (SIGTERM the process group) when
+   the app exits. (This intentionally differs from research delegation
+   runs, which must survive app exit; the interactive terminal is a
+   companion window, not a job.)
+3. `--agent-terminal` stays opt-in per run — never sticky state.
+
+**In-app terminal: do NOT embed a terminal emulator.** Claude Code's
+interactive TUI needs full terminal emulation (PTY + escape rendering) —
+days of work and a fidelity rabbit hole; X11 XEmbed tricks are fragile
+and Wayland-hostile. The right version of "the terminal inside the app"
+is the already-specced **CLI-backed chat mode** (`--chat-agent claude`):
+headless stream-json runs rendered in the app's own chat pane — native
+UI, no window management, subscription-billed. If in-app agent
+conversation is wanted, build that follow-on; keep the real terminal
+(on its own i3 workspace) for the demo beat where the audience should
+SEE Claude Code being Claude Code.
 
 ## Web reports (Claude Artifacts + Codex local HTML)
 
@@ -166,7 +373,7 @@ differ, so normalize:
 - Delta chips + tracked alerts now fire on genuinely new data — the
   research flow runs against reality.
 - Demo-repeatability guard: after a good live session, snapshot the db
-  (`cp community-pulse.db demo-live-snapshot.db`) so the exact state is
+  (`pulse --database community-pulse.db snapshot demo-live-snapshot.db`) so the exact state is
   re-loadable if demo-day networks misbehave; `--fixture` remains the
   deep fallback.
 
@@ -265,6 +472,41 @@ Pinned decisions (do not re-litigate during implementation):
   script on PATH that calls the MCP endpoint) completes the loop without
   real accounts; R4 = live ingest interval honors the 120s floor and
   snapshot/restore works.
+
+## Agent integration at startup (make the loop zero-ritual)
+
+Goal: `pulse app` alone yields an agent-connected app. Three layers —
+automatic, explicit-once, and optional:
+
+1. **MCP on by default.** `app` listens on `127.0.0.1:7432` unless
+   `--no-mcp` (keep `--mcp-port` as override). Port-bind failure (second
+   instance) is a non-fatal stderr warning — the app still runs.
+   Status bar gains a persistent `mcp ● :7432` indicator; when a
+   tools/call arrives over MCP, flash it (and tag the resulting tool
+   chip "via mcp") so the audience can SEE the external agent acting.
+   Localhost-only stays hard-coded; that is the security boundary.
+2. **`pulse setup` (explicit, idempotent, run once).**
+   `pulse setup claude` shells out to
+   `claude mcp add -s user --transport http pulse http://127.0.0.1:7432/mcp`
+   (detect already-registered via `claude mcp list` and say so);
+   `pulse setup codex` merges the `[mcp_servers.pulse]` entry (mcp-remote
+   shim) into `~/.codex/config.toml`, refusing to touch a malformed file.
+   `pulse setup` with no arg runs both + prints doctor-style status.
+   Never run these implicitly at app startup — mutating user agent
+   configs at launch is rude and surprising.
+3. **`app --agent-terminal [claude|codex]` (demo convenience, optional).**
+   Spawns `$TERMINAL -e <agent>` (default claude; fall back to
+   i3-sensible-terminal) so one command brings up app + visible agent
+   session side by side. May be passed twice to spawn both for the
+   comparative demo. Document that each session still needs its login
+   warm (that part cannot be automated). R3's in-app Research buttons
+   remain the fully in-app agent path; this flag is for the
+   terminal-visible demo.
+
+Acceptance: fresh machine flow is `pulse setup` once, then
+`pulse app --companion` forever after — agent-connected with zero
+per-run ritual; `--no-mcp` verified; two-instance bind conflict is a
+warning, not a crash.
 
 ## Costs & guardrails
 

@@ -1,4 +1,4 @@
-.PHONY: check fmt clippy test demo
+.PHONY: check fmt clippy test demo demo-mobile demo-companion
 
 check: fmt clippy test
 
@@ -13,3 +13,9 @@ test:
 
 demo:
 	cargo run -- --fixture --replay app
+
+demo-mobile:
+	cargo run -- --fixture --replay app --mobile
+
+demo-companion:
+	cargo run -- --fixture --replay app --companion

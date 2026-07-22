@@ -2,7 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const ATTENTION_BUDGET: usize = 5;
+pub const DEFAULT_BUDGET: usize = 5;
+pub const MAX_BUDGET: usize = 10;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CommunityPost {
@@ -22,6 +23,7 @@ pub struct DigestCard {
     pub id: String,
     pub topic: String,
     pub headline: String,
+    pub headline_url: String,
     pub sources: Vec<String>,
     pub score: f64,
     pub trend_score: f64,
@@ -39,6 +41,131 @@ pub struct EvidencePost {
     pub title: String,
     pub url: String,
     pub published_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Citation {
+    pub url: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResearchEnrichment {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub watch: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResearchQuote {
+    pub text: String,
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResearchSection {
+    pub kind: String,
+    pub body: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quotes: Vec<ResearchQuote>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResearchSubmission {
+    pub topic_id: String,
+    pub agent: String,
+    pub title: String,
+    pub markdown: String,
+    #[serde(default)]
+    pub citations: Vec<Citation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_report: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub article_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<ResearchSection>,
+    #[serde(default, flatten)]
+    pub enrichment: ResearchEnrichment,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResearchReport {
+    pub id: i64,
+    pub topic_id: String,
+    pub agent: String,
+    pub title: String,
+    pub markdown: String,
+    pub citations: Vec<Citation>,
+    pub web_report: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub article_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<ResearchSection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub watch: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResearchTopic {
+    pub id: String,
+    pub display: String,
+    pub z: f64,
+    pub trend: f64,
+    pub mentions: usize,
+    pub window_hours: usize,
+    pub sources: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResearchPost {
+    pub source: String,
+    pub title: String,
+    pub url: String,
+    pub points: i64,
+    pub published_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResearchSeries {
+    pub id: String,
+    pub buckets: usize,
+    pub bucket_hours: usize,
+    pub counts: Vec<usize>,
+    pub baseline_mean: f64,
+    pub baseline_stddev: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResearchRun {
+    pub id: u64,
+    pub topic_id: String,
+    pub agent: String,
+    pub status: String,
+    pub started_at: DateTime<Utc>,
+    #[serde(default)]
+    pub finished_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub progress: String,
+    pub stderr_tail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceStatus {
+    pub name: String,
+    pub ok: bool,
+    pub count: usize,
+    pub error: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

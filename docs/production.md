@@ -8,7 +8,7 @@ store immutable snapshots in a columnar store. Do not recalculate velocity per
 user.
 
 At read time, load a compact interest vector from a KV store, rerank the shared
-candidate set, apply policy filters and decay, and return five. This remains
+candidate set, apply policy filters and decay, and return the user's bounded budget. This remains
 cheap enough for fan-out-on-read and preserves a single definition of “moving.”
 
 SQLite becomes Postgres for normalized operational records; an analytical or
@@ -21,8 +21,20 @@ its query implementation changes, while the tool and UI contracts do not.
 - idempotent source ids make retries safe;
 - per-source health prevents one failed adapter from suppressing the rest;
 - exponential decay removes stale trends even when no replacement arrives;
-- the five-card cap is enforced after policy and personalization;
+- the persisted attention budget (default five, ceiling ten) is enforced after policy and personalization;
 - source diversity remains a ranking feature and a visible trust signal.
+
+The prototype's live controller already supplies the local version of this
+boundary: one 120-second gate across manual and scheduled triggers, partial
+source success, bounded backoff, and a consistent snapshot fallback.
+
+## Agent research
+
+Research is pull-oriented and never enters ranking. In a multi-user service,
+store attributed reports separately from shared trend snapshots, enqueue
+user-initiated agent jobs with explicit quota controls, and stream report-state
+changes to clients. Keep citations and provenance durable; never use report
+content to silently raise a topic above the user's attention budget.
 
 ## Mobile
 

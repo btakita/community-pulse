@@ -12,9 +12,11 @@ Keep the window at 1480×900 or use screen-share “portion of screen.”
 
 **0:00–0:15 — attention budget**
 
-Point at the `5 / 5` digest and say: “Three public feeds become one shared trend
-table. The product invariant is an attention budget, so scale never turns this
-into an infinite feed.”
+Point at the `5 / 5` master strip and say: “Three public feeds become one shared
+trend table. A budget always exists, but the user owns it.” Move the master
+fader to 8; the fixture honestly shows `7 / 8` because only seven signals are
+eligible. Return it to 5 for the core run and say: “Scale never turns this into
+an infinite feed, and deeper evidence stays one pull away.”
 
 Click **What's moving?**. The `get_pulse` chip should appear, followed by the
 two-sentence response.
@@ -42,6 +44,29 @@ Say: “This run is a deterministic SQLite fixture and replay agent, so intervie
 Wi-Fi cannot take it down. In production the shared trend computation is done
 once; each user only reranks a small candidate set.”
 
+## Additive demo beats (after the 90-second core)
+
+- Start with `app --companion`: move a desktop fader or send **More Rust**, then
+point to the synchronized Mix tab in the phone frame. Open **why?** there to
+show the evidence bottom sheet and the previous-snapshot delta chips. Rotate
+with the bezel control or Ctrl+R: the tabs become a left rail and the same open
+evidence becomes a right panel without resetting state. A digest headline or
+evidence row routes outward to its original community post.
+- Start with `app --mcp-port 7432`, register the endpoint, then ask an external
+agent to set the attention budget to eight, check the pulse, and track WASM
+runtimes. Point to the synchronized master fader, live tracked state, and
+threshold alert; no pointer input is involved.
+- On desktop, expand one card and click **Research with Claude** and **Research
+with Codex**. The two run chips may execute concurrently; when reports land,
+open **RESEARCH** and show the side-by-side comparison. This is an additive
+beat—skip it if account preflight was not completed before the call.
+- For a live-data variant, start a previously populated database with
+`app --live`; the header ingest action and timer share the same 120-second
+cooldown. Snapshot a good run beforehand with `pulse snapshot` so network
+trouble can fall back to an identical database.
+- All additive beats are optional. If any surface has trouble, continue the core
+desktop run without changing the story.
+
 ## Fast recovery
 
 - Empty database: restart with `--fixture`.
@@ -49,4 +74,19 @@ once; each user only reranks a small candidate set.”
 - Window trouble: run `cargo run -- --fixture top` and narrate the same data
   story from the CLI.
 - Before every rehearsal: remove or choose a disposable `--database` path,
-  because `--fixture` intentionally replaces that database's data.
+because `--fixture` intentionally replaces that database's data.
+
+## Attention-budget rehearsal checks
+
+- Start with a disposable database and confirm the default master strip reads
+`5 / 5` on desktop and mobile.
+- Move the desktop master 3 → 8 → 10; confirm both windows synchronize and the
+fixture reads `3 / 3`, `7 / 8`, then `7 / 10`. Return it to 5.
+- Send **Give me eight today** through replay chat; confirm the tool chip is
+`set_interests`, both master faders read 8, and the status reads `7/8 signals`.
+- Restart with the same database and confirm budget 8 persists. `--fixture`
+refreshes community data but intentionally preserves the user setting.
+- Through MCP request `attention_budget: 50`; confirm `isError: false`, the
+returned/stored budget is 10, and both visible lenses update to `7 / 10`.
+- Leave top-card evidence open while changing the master and confirm research
+stays open; then restore budget 5 before the 90-second core.

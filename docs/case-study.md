@@ -15,15 +15,16 @@ The prototype treats interface choice as a lens over a deterministic engine:
 2. extract explainable topics;
 3. score change relative to a baseline;
 4. apply explicit user weights; and
-5. stop at five cards.
+5. stop at the user's bounded attention budget.
 
 Chat is the primary agent surface because it demonstrates tool use and shared
 state without introducing microphone, resampling, VAD, echo cancellation, or
-meeting-audio routing. Voice can use the same four tools later.
+meeting-audio routing. Desktop research extends the bridge with attributed
+agent reports; voice can use the same bridge later.
 
 ## Product decisions made concrete
 
-- **Doesn't overwhelm:** a hard five-card attention budget, tested in the
+- **Doesn't overwhelm:** a persisted user-owned attention budget (five by default, ten max), tested in the
   engine and CLI.
 - **Doesn't go stale:** sliding time windows and snapshots; recent velocity
   decays out of the score naturally.
@@ -33,13 +34,17 @@ meeting-audio routing. Voice can use the same four tools later.
 - **Demo reliability:** real adapters prove the data path; fixture and replay
   make the live story independent of interview Wi-Fi.
 - **One state:** agent calls and pointer actions cross the same bridge and update
-  the same `lazily` graph.
+the same `lazily` graph.
+- **Research without embedded credentials:** installed Claude/Codex CLIs inspect
+the unbudgeted long tail and write cited reports back through localhost MCP;
+research annotates the digest but never bypasses its attention budget.
 
 ## What the prototype proves
 
 The working artifact proves ingestion boundaries, normalized persistence,
 deterministic scoring, capped personalization, evidence retrieval, direct
-manipulation, streaming compatible tool calls, and a complete offline demo.
+manipulation, streaming-compatible tool calls, cited two-agent research,
+partial-success live ingest, restorable snapshots, and a complete offline demo.
 
 It deliberately does not claim that title/tag extraction is a production
 ontology or that one SQLite process is a 100k-user architecture. Those are

@@ -1,0 +1,109 @@
+export struct DigestRow {
+    id: string,
+    topic: string,
+    headline: string,
+    url: string,
+    sources: string,
+    score: string,
+    delta: string,
+    mentions: string,
+    spark-line: string,
+    spark-area: string,
+    spark-end-x: float,
+    spark-end-y: float,
+    research-count: int,
+    research-id: int,
+    research-agent: string,
+    research-verdict: string,
+    research-summary: string,
+}
+
+export struct TopicRow {
+    id: string,
+    topic: string,
+    weight: string,
+    state: string,
+    weight-value: float,
+    active: bool,
+    muted: bool,
+}
+
+export struct ChatRow {
+    role: string,
+    body: string,
+    tool: string,
+}
+
+export struct EvidencePostRow {
+    source: string,
+    title: string,
+    url: string,
+    detail: string,
+    claude-brief-id: int,
+    codex-brief-id: int,
+}
+
+export struct EvidenceRow {
+    id: string,
+    topic: string,
+    mentions: string,
+    baseline-value: string,
+    baseline: string,
+    z-score: string,
+    first-seen: string,
+    source-count: string,
+    spark-line: string,
+    spark-area: string,
+    spark-end-x: float,
+    spark-end-y: float,
+    baseline-y: float,
+}
+
+export struct ResearchTitleRow {
+    id: int,
+    agent: string,
+    title: string,
+    verdict: string,
+    summary: string,
+}
+
+export struct SuggestedTopicRow {
+    topic: string,
+    agent: string,
+    from-research: bool,
+}
+
+export struct ResearchQuoteRow {
+    text: string,
+    url: string,
+    author: string,
+}
+
+export struct ResearchSectionRow {
+    kind: string,
+    heading: string,
+    body: string,
+    quotes: [ResearchQuoteRow],
+}
+
+export struct ResearchSummaryRow {
+    id: int,
+    group: string,
+    agent: string,
+    title: string,
+    age: string,
+    status: string,
+}
+
+export struct CitationRow {
+    label: string,
+    url: string,
+    note: string,
+}
+
+export struct SourceStatusRow {
+    name: string,
+    ok: bool,
+    count: int,
+    error: string,
+}

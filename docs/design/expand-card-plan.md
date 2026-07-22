@@ -1,5 +1,28 @@
 # Expand-Card (Evidence) Feature Plan
 
+## Affordance update (operator feedback, do next): icons, not text links
+
+The "why?" text link is not discoverable enough. Replace the text
+affordances with icon buttons:
+
+1. **Expand**: a bordered icon button (~24px, same visual family as the
+   mixer's M mute button) at the card's meta-row right edge, containing a
+   chevron-down glyph (SVG path, not a text character — text chevrons
+   render inconsistently across fonts). Hover: border→ink-3 like other
+   controls. Optional short label "evidence" beside it at desktop width
+   for first-run discoverability.
+2. **Open state / close**: the same button rotates the chevron 180°
+   (animate rotation ~150ms; respect reduced-motion) and takes the
+   accent border while open — the button itself is the close control.
+   Additionally place a small ✕ icon button in the expanded evidence
+   panel's top-right corner as a second close affordance (people look
+   for close INSIDE the thing they want to close).
+3. Both buttons keep ≥24px hit targets; Escape-to-close and the
+   auto-collapse-on-other-expand behaviors are unchanged.
+4. Mobile follow-on note: same chevron button on mobile cards when
+   mobile parity lands; the bottom sheet already has the grab-handle +
+   scrim-tap affordances.
+
 Make the digest card expand/collapse interaction actually work, matching
 `mockup-desktop.html` (card 02 there shows the expanded target state).
 
