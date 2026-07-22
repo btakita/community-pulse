@@ -618,9 +618,10 @@ component ChatMessage inherits Rectangle {
 
     height: content.preferred-height;
     background: transparent;
+    clip: true;
 
     content := VerticalLayout {
-        width: parent.width;
+        width: root.width;
         spacing: 5px;
         MonoLabel {
             text: data.role;
@@ -644,6 +645,7 @@ component ChatMessage inherits Rectangle {
             }
         }
         message-text := Text {
+            width: root.width;
             visible: data.role != "TOOL";
             text: data.body;
             color: Tokens.ink-2;
@@ -973,9 +975,11 @@ export component AppWindow inherits Window {
                 }
             }
 
-            Rectangle {
+            chat-panel := Rectangle {
                 width: 344px;
                 background: Tokens.ground;
+                clip: true;
+                Rectangle { x: 0; width: 1px; height: parent.height; background: Tokens.line; }
                 VerticalLayout {
                     padding-left: 18px;
                     padding-right: 18px;
@@ -988,11 +992,15 @@ export component AppWindow inherits Window {
                         Text { text: "chat  ·  voice-ready"; color: Tokens.ink-3; font-family: "JetBrains Mono"; font-size: 8.5px; }
                     }
 
-                    ScrollView {
+                    chat-scroll := ScrollView {
                         vertical-stretch: 1;
-                        VerticalLayout {
+                        chat-list := VerticalLayout {
+                            width: chat-scroll.width;
                             spacing: 12px;
-                            for message in root.chat: ChatMessage { data: message; }
+                            for message in root.chat: ChatMessage {
+                                width: chat-list.width;
+                                data: message;
+                            }
                         }
                     }
 
@@ -1070,8 +1078,7 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
-                Rectangle { width: 1px; height: parent.height; background: Tokens.line; }
-            }
+        }
         }
 
         Rectangle {
