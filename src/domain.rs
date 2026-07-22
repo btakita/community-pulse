@@ -30,6 +30,7 @@ pub struct DigestCard {
     pub mentions_1h: usize,
     pub mentions_6h: usize,
     pub mentions_24h: usize,
+    pub sparkline: Vec<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

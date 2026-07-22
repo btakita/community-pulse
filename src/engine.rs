@@ -13,6 +13,8 @@ pub struct PulseEngine {
     connection: Connection,
 }
 
+type HeadlineCandidates = (Vec<(String, String)>, Vec<String>);
+
 impl PulseEngine {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let connection = Connection::open(path).context("open pulse database")?;
@@ -220,6 +222,7 @@ impl PulseEngine {
         &self,
         interests: &InterestModel,
         limit: Option<usize>,
+        now: DateTime<Utc>,
     ) -> Result<Vec<DigestCard>> {
         let requested = limit.unwrap_or(ATTENTION_BUDGET).clamp(1, ATTENTION_BUDGET);
         let mut statement = self.connection.prepare(
@@ -254,12 +257,11 @@ impl PulseEngine {
             if affinity == 0.0 {
                 continue;
             }
-            let (headline, sources) = self.headline_and_sources(&id)?;
             cards.push(DigestCard {
                 id,
                 topic,
-                headline,
-                sources,
+                headline: String::new(),
+                sources: Vec::new(),
                 score: trend_score * affinity,
                 trend_score,
                 interest_affinity: affinity,
@@ -267,38 +269,50 @@ impl PulseEngine {
                 mentions_1h,
                 mentions_6h,
                 mentions_24h,
+                sparkline: Vec::new(),
             });
         }
         cards.sort_by(|left, right| right.score.total_cmp(&left.score));
+        let mut used_posts = HashSet::new();
+        for card in &mut cards {
+            let (candidates, sources) = self.headline_candidates(&card.id)?;
+            card.headline = candidates
+                .into_iter()
+                .find_map(|(post_id, title)| used_posts.insert(post_id).then_some(title))
+                .unwrap_or_else(|| format!("{} is gaining attention", card.topic));
+            card.sources = sources;
+            card.sparkline = hourly_series(&self.connection, &card.id, now, 12)?;
+        }
         cards.truncate(requested);
         Ok(cards)
     }
 
-    fn headline_and_sources(&self, topic: &str) -> Result<(String, Vec<String>)> {
+    fn headline_candidates(&self, topic: &str) -> Result<HeadlineCandidates> {
         let mut statement = self.connection.prepare(
             r#"
-            SELECT p.title, p.source
-            FROM posts p
-            JOIN post_topics pt ON pt.post_id = p.id
-            WHERE pt.topic_id = ?1
+                SELECT p.id, p.title, p.source
+                FROM posts p
+                JOIN post_topics pt ON pt.post_id = p.id
+                WHERE pt.topic_id = ?1
             ORDER BY p.published_at DESC, p.points DESC
             LIMIT 8
             "#,
         )?;
         let rows = statement.query_map([topic], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
         })?;
-        let mut headline = None;
+        let mut candidates = Vec::new();
         let mut sources = BTreeSet::new();
         for row in rows {
-            let (title, source) = row?;
-            headline.get_or_insert(title);
+            let (post_id, title, source) = row?;
+            candidates.push((post_id, title));
             sources.insert(source);
         }
-        Ok((
-            headline.unwrap_or_else(|| format!("{} is gaining attention", display_topic(topic))),
-            sources.into_iter().collect(),
-        ))
+        Ok((candidates, sources.into_iter().collect()))
     }
 
     pub fn explain_trend(&self, topic: &str, now: DateTime<Utc>) -> Result<TrendEvidence> {
@@ -356,12 +370,7 @@ impl PulseEngine {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
-        let mut sparkline = Vec::with_capacity(12);
-        for offset in (0..12).rev() {
-            let start = now - Duration::hours(offset + 1);
-            let end = now - Duration::hours(offset);
-            sparkline.push(count_mentions(&self.connection, topic, start, end)?);
-        }
+        let sparkline = hourly_series(&self.connection, topic, now, 12)?;
 
         Ok(TrendEvidence {
             id: topic.to_owned(),
@@ -515,6 +524,22 @@ fn count_mentions(
         params![topic, start.timestamp(), end.timestamp()],
         |row| row.get::<_, i64>(0),
     )? as usize)
+}
+
+fn hourly_series(
+    connection: &Connection,
+    topic: &str,
+    now: DateTime<Utc>,
+    buckets: usize,
+) -> Result<Vec<usize>> {
+    (0..buckets)
+        .rev()
+        .map(|offset| {
+            let start = now - Duration::hours(offset as i64 + 1);
+            let end = now - Duration::hours(offset as i64);
+            count_mentions(connection, topic, start, end)
+        })
+        .collect()
 }
 
 pub fn extract_topics(title: &str, tags: &[String]) -> Vec<String> {

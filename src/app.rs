@@ -5,6 +5,7 @@ use crate::reactive::UiSnapshot;
 use crate::tools::ToolBridge;
 use anyhow::Result;
 use slint::{ModelRc, SharedString, VecModel};
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 slint::include_modules!();
@@ -171,26 +172,45 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
     let digest = snapshot
         .digest
         .into_iter()
-        .map(|card| DigestRow {
-            id: card.id.into(),
-            topic: card.topic.into(),
-            headline: card.headline.into(),
-            sources: card.sources.join(" + ").into(),
-            score: format!("{:.1}", card.score).into(),
-            delta: format!("{:+.1}σ", card.z_score).into(),
-            mentions: format!(
-                "{} now · {} / 6h · {} / 24h",
-                card.mentions_1h, card.mentions_6h, card.mentions_24h
-            )
-            .into(),
+        .map(|card| {
+            let chart = spark_geometry(&card.sparkline, None);
+            DigestRow {
+                id: card.id.into(),
+                topic: card.topic.into(),
+                headline: card.headline.into(),
+                sources: card.sources.join(" + ").into(),
+                score: format!("{:.1}", card.score).into(),
+                delta: format!("{:+.1}σ", card.z_score).into(),
+                mentions: format!(
+                    "{} now · {} / 6h · {} / 24h",
+                    card.mentions_1h, card.mentions_6h, card.mentions_24h
+                )
+                .into(),
+                spark_line: chart.line.into(),
+                spark_area: chart.area.into(),
+                spark_end_x: chart.end_x,
+                spark_end_y: chart.end_y,
+            }
         })
         .collect();
     window.set_digest(model(digest));
 
-    window.set_topics(model(topic_rows(
-        &snapshot.interests,
-        &snapshot.suggested_topics,
-    )));
+    let topics = topic_rows(&snapshot.interests, &snapshot.suggested_topics);
+    let mixer_topics = topics
+        .iter()
+        .map(|topic| topic.id.to_string())
+        .collect::<std::collections::HashSet<_>>();
+    window.set_topics(model(topics));
+    window.set_suggested_topics(model(
+        snapshot
+            .suggested_topics
+            .iter()
+            .filter(|topic| !mixer_topics.contains(*topic))
+            .take(3)
+            .cloned()
+            .map(SharedString::from)
+            .collect(),
+    ));
     window.set_tracked_topics(model(
         snapshot
             .tracked_topics
@@ -230,6 +250,7 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
     window.set_status(snapshot.status.into());
 
     if let Some(evidence) = snapshot.evidence {
+        let chart = spark_geometry(&evidence.sparkline, Some(evidence.baseline_mean));
         window.set_has_evidence(true);
         window.set_evidence(EvidenceRow {
             topic: evidence.topic.into(),
@@ -238,13 +259,24 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
                 evidence.mentions_1h, evidence.mentions_6h, evidence.mentions_24h
             )
             .into(),
-            baseline: format!(
-                "baseline μ {:.1} · σ {:.1}",
-                evidence.baseline_mean, evidence.baseline_stddev
-            )
+            baseline: if evidence.baseline_stddev < 1.0 {
+                format!(
+                    "baseline μ {:.1} · σ {:.1} · z floors σ at 1.0",
+                    evidence.baseline_mean, evidence.baseline_stddev
+                )
+            } else {
+                format!(
+                    "baseline μ {:.1} · σ {:.1}",
+                    evidence.baseline_mean, evidence.baseline_stddev
+                )
+            }
             .into(),
             z_score: format!("z = {:+.2}", evidence.z_score).into(),
-            sparkline: sparkline(&evidence.sparkline).into(),
+            spark_line: chart.line.into(),
+            spark_area: chart.area.into(),
+            spark_end_x: chart.end_x,
+            spark_end_y: chart.end_y,
+            baseline_y: chart.baseline_y,
             posts: evidence
                 .posts
                 .iter()
@@ -313,16 +345,74 @@ fn display_topic(topic: &str) -> String {
         .join(" ")
 }
 
-fn sparkline(points: &[usize]) -> String {
-    const LEVELS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-    let max = points.iter().copied().max().unwrap_or(1).max(1);
-    points
-        .iter()
-        .map(|point| LEVELS[point * (LEVELS.len() - 1) / max])
-        .collect()
+struct SparkGeometry {
+    line: String,
+    area: String,
+    end_x: f32,
+    end_y: f32,
+    baseline_y: f32,
+}
+
+fn spark_geometry(points: &[usize], baseline: Option<f64>) -> SparkGeometry {
+    const WIDTH: f64 = 116.0;
+    const HEIGHT: f64 = 34.0;
+    const PAD: f64 = 3.0;
+
+    let mut low = points.iter().copied().min().unwrap_or_default() as f64;
+    let mut high = points.iter().copied().max().unwrap_or(1) as f64;
+    if let Some(baseline) = baseline {
+        low = low.min(baseline);
+        high = high.max(baseline);
+    }
+    if (high - low).abs() < f64::EPSILON {
+        high = low + 1.0;
+    }
+    let y_for = |value: f64| HEIGHT - PAD - ((value - low) / (high - low)) * (HEIGHT - PAD * 2.0);
+    let step = if points.len() > 1 {
+        (WIDTH - PAD * 2.0) / (points.len() - 1) as f64
+    } else {
+        0.0
+    };
+    let mut line = String::new();
+    let mut end_x = PAD;
+    let mut end_y = HEIGHT - PAD;
+    for (index, value) in points.iter().enumerate() {
+        let x = PAD + step * index as f64;
+        let y = y_for(*value as f64);
+        let _ = write!(
+            line,
+            "{}{:0.2} {:0.2}",
+            if index == 0 { "M" } else { " L" },
+            x,
+            y
+        );
+        end_x = x;
+        end_y = y;
+    }
+    if line.is_empty() {
+        line.push_str("M3 31 L113 31");
+        end_x = WIDTH - PAD;
+    }
+    let area = format!("{line} L{end_x:.2} 31 L3 31 Z");
+    SparkGeometry {
+        line,
+        area,
+        end_x: end_x as f32,
+        end_y: end_y as f32,
+        baseline_y: baseline.map(y_for).unwrap_or(-1.0) as f32,
+    }
 }
 
 fn compact_result(value: &serde_json::Value) -> String {
+    if value.get("error").and_then(serde_json::Value::as_bool) == Some(true) {
+        return format!(
+            "tool failed: {}",
+            value
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown error")
+        );
+    }
     if let Some(count) = value.get("count").and_then(serde_json::Value::as_u64) {
         return format!("updated {count} digest cards");
     }

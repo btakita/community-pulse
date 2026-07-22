@@ -75,7 +75,7 @@ async fn main() -> Result<()> {
         Command::Top { limit, json } => {
             ensure_data(&engine)?;
             engine.recompute(Utc::now())?;
-            let cards = engine.get_pulse(&engine.load_interests()?, Some(limit))?;
+            let cards = engine.get_pulse(&engine.load_interests()?, Some(limit), Utc::now())?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&cards)?);
             } else {

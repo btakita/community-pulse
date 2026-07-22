@@ -21,7 +21,7 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive"] }
 futures-util = "0.3"
 feed-rs = "2.4"
-lazily = { version = "0.48", features = ["thread-safe"] }
+lazily = { version = "0.48.1", features = ["thread-safe"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }

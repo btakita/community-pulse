@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use feed_rs::model::Entry;
 use reqwest::Client;
 use serde::Deserialize;
+use std::time::Duration;
 
 #[async_trait]
 pub trait Ingester: Send + Sync {
@@ -82,6 +83,7 @@ impl Ingester for ProductHuntIngester {
 pub async fn fetch_all() -> Vec<(&'static str, Result<Vec<CommunityPost>>)> {
     let client = Client::builder()
         .user_agent("community-pulse/0.1 (+https://github.com/btakita/community-pulse)")
+        .timeout(Duration::from_secs(20))
         .build()
         .expect("build HTTP client");
     let ingesters: Vec<Box<dyn Ingester>> = vec![

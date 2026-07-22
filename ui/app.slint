@@ -1,23 +1,30 @@
-import { LineEdit, ScrollView } from "std-widgets.slint";
+import { LineEdit, Palette, ScrollView } from "std-widgets.slint";
+import "fonts/InstrumentSans[wdth,wght].ttf";
+import "fonts/JetBrainsMono[wght].ttf";
 
 export global Tokens {
-    in property <color> ground: #EDF0F4;
-    in property <color> surface: #FFFFFF;
-    in property <color> raised: #F6F8FB;
-    in property <color> inset: #E7EBF1;
-    in property <color> line: #D7DDE6;
-    in property <color> line-strong: #C2CAD7;
-    in property <color> ink: #1A2230;
-    in property <color> ink-2: #54617A;
-    in property <color> ink-3: #8792A3;
-    in property <color> accent: #B97C1E;
-    in property <color> accent-soft: #F6ECDD;
-    in property <color> ok: #1E7A44;
-    in property <color> rust: #C07C15;
-    in property <color> local: #008A66;
-    in property <color> ai: #6D55D9;
-    in property <color> wasm: #C24D75;
-    in property <color> steel: #3D6FA8;
+    in-out property <bool> dark: true;
+    out property <color> ground: dark ? #101419 : #EDF0F4;
+    out property <color> surface: dark ? #1B212B : #FFFFFF;
+    out property <color> raised: dark ? #222A35 : #F6F8FB;
+    out property <color> inset: dark ? #141922 : #E7EBF1;
+    out property <color> line: dark ? #2C3644 : #D7DDE6;
+    out property <color> line-strong: dark ? #3A4657 : #C2CAD7;
+    out property <color> ink: dark ? #E9EDF3 : #1A2230;
+    out property <color> ink-2: dark ? #9AA6B7 : #54617A;
+    out property <color> ink-3: dark ? #5F6D80 : #8792A3;
+    out property <color> accent: dark ? #EFA43F : #B97C1E;
+    out property <color> accent-soft: dark ? #EFA43F24 : #B97C1E1F;
+    out property <color> rise: dark ? #E09A38 : #B06F10;
+    out property <color> rise-soft: dark ? #E09A381F : #B06F101F;
+    out property <color> fall: dark ? #7C97C4 : #3D6FA8;
+    out property <color> ok: dark ? #4CAF6E : #1E7A44;
+    out property <color> ok-soft: dark ? #4CAF6E24 : #1E7A441F;
+    out property <color> rust: dark ? #C8822A : #C07C15;
+    out property <color> local: dark ? #17A183 : #008A66;
+    out property <color> ai: dark ? #8672E8 : #6D55D9;
+    out property <color> wasm: dark ? #C75F81 : #C24D75;
+    out property <color> steel: dark ? #4C82C4 : #3D6FA8;
 }
 
 export struct DigestRow {
@@ -28,6 +35,10 @@ export struct DigestRow {
     score: string,
     delta: string,
     mentions: string,
+    spark-line: string,
+    spark-area: string,
+    spark-end-x: float,
+    spark-end-y: float,
 }
 
 export struct TopicRow {
@@ -51,13 +62,17 @@ export struct EvidenceRow {
     velocity: string,
     baseline: string,
     z-score: string,
-    sparkline: string,
+    spark-line: string,
+    spark-area: string,
+    spark-end-x: float,
+    spark-end-y: float,
+    baseline-y: float,
     posts: string,
 }
 
 component MonoLabel inherits Text {
     color: Tokens.ink-3;
-    font-family: "Noto Sans Mono";
+    font-family: "JetBrains Mono";
     font-size: 9.5px;
     font-weight: 700;
     letter-spacing: 1.2px;
@@ -77,7 +92,7 @@ component FlatAction inherits Rectangle {
     Text {
         text: root.text;
         color: active ? Tokens.accent : Tokens.ink-2;
-        font-family: "Noto Sans Mono";
+        font-family: "JetBrains Mono";
         font-size: 10px;
         font-weight: 600;
         horizontal-alignment: center;
@@ -89,14 +104,134 @@ component FlatAction inherits Rectangle {
     }
 }
 
+component PulseWave inherits Rectangle {
+    private property <float> sweep: 0.0;
+
+    background: transparent;
+
+    Timer {
+        interval: 52ms;
+        running: true;
+        triggered => {
+            root.sweep = root.sweep >= 1.0 ? 0.0 : root.sweep + 0.01;
+        }
+    }
+
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 460;
+        viewbox-height: 44;
+        fit: fill;
+        stroke: Tokens.line-strong;
+        stroke-width: 1.5px;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+        fill: transparent;
+        commands: "M0 24 L96 24 L104 24 L112 10 L120 36 L128 20 L136 24 L228 24 L236 24 L244 6 L252 40 L260 18 L268 24 L364 24 L372 24 L380 12 L388 34 L396 21 L404 24 L460 24";
+    }
+
+    hot-clip := Rectangle {
+        x: (root.width + self.width) * root.sweep - self.width;
+        width: root.width * 0.20;
+        height: root.height;
+        clip: true;
+        background: transparent;
+
+        Path {
+            x: -hot-clip.x;
+            width: root.width;
+            height: root.height;
+            viewbox-width: 460;
+            viewbox-height: 44;
+            fit: fill;
+            stroke: Tokens.accent-soft;
+            stroke-width: 6px;
+            stroke-line-cap: round;
+            stroke-line-join: round;
+            fill: transparent;
+            commands: "M0 24 L96 24 L104 24 L112 10 L120 36 L128 20 L136 24 L228 24 L236 24 L244 6 L252 40 L260 18 L268 24 L364 24 L372 24 L380 12 L388 34 L396 21 L404 24 L460 24";
+        }
+        Path {
+            x: -hot-clip.x;
+            width: root.width;
+            height: root.height;
+            viewbox-width: 460;
+            viewbox-height: 44;
+            fit: fill;
+            stroke: Tokens.accent;
+            stroke-width: 1.8px;
+            stroke-line-cap: round;
+            stroke-line-join: round;
+            fill: transparent;
+            commands: "M0 24 L96 24 L104 24 L112 10 L120 36 L128 20 L136 24 L228 24 L236 24 L244 6 L252 40 L260 18 L268 24 L364 24 L372 24 L380 12 L388 34 L396 21 L404 24 L460 24";
+        }
+    }
+}
+
+component SparkChart inherits Rectangle {
+    in property <bool> large: false;
+    in property <color> tone: Tokens.rise;
+    in property <string> line-path: "M3 31 L113 31";
+    in property <string> area-path: "M3 31 L113 31 L113 31 L3 31 Z";
+    in property <float> end-x: 113;
+    in property <float> end-y: 31;
+    in property <float> baseline-y: -1;
+
+    background: transparent;
+
+    if large && root.baseline-y >= 0: HorizontalLayout {
+        y: parent.height * root.baseline-y / 34;
+        height: 1px;
+        spacing: 5px;
+        for dash in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]: Rectangle {
+            background: Tokens.ink-3;
+            opacity: 0.7;
+        }
+    }
+
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 116;
+        viewbox-height: 34;
+        fit: fill;
+        fill: Tokens.rise-soft;
+        stroke: transparent;
+        commands: root.area-path;
+    }
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 116;
+        viewbox-height: 34;
+        fit: fill;
+        fill: transparent;
+        stroke: root.tone;
+        stroke-width: large ? 2px : 1.7px;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+        commands: root.line-path;
+    }
+    Rectangle {
+        x: parent.width * root.end-x / 116 - self.width / 2;
+        y: parent.height * root.end-y / 34 - self.height / 2;
+        width: large ? 7px : 6px;
+        height: self.width;
+        border-radius: self.width / 2;
+        border-width: large ? 1.5px : 1px;
+        border-color: Tokens.surface;
+        background: root.tone;
+    }
+}
+
 component TopicChannel inherits Rectangle {
     in property <TopicRow> data;
     in property <color> topic-color: data.id == "rust" ? Tokens.rust :
         data.id == "local-first" ? Tokens.local :
         data.id == "ai-infra" ? Tokens.ai :
         data.id == "wasm-runtimes" ? Tokens.wasm : Tokens.steel;
-    in property <float> visual-weight: data.muted ? 0.0 :
-        (data.weight-value > 0.0 ? data.weight-value / 2.0 : 0.42);
+    in property <float> visual-weight: (data.weight-value + 1.0) / 3.0;
     callback set-weight(float);
 
     height: 67px;
@@ -126,16 +261,16 @@ component TopicChannel inherits Rectangle {
             Text {
                 text: data.id == "wasm-runtimes" ? "wasm" : data.id;
                 color: data.muted ? Tokens.ink-3 : Tokens.ink;
-                font-family: "Noto Sans Mono";
+                font-family: "JetBrains Mono";
                 font-size: 11px;
                 font-weight: 700;
                 vertical-alignment: center;
                 horizontal-stretch: 1;
             }
             Text {
-                text: data.muted ? "off" : (data.weight-value > 0.0 ? data.weight : "0.5");
+                text: data.muted ? "off" : data.weight;
                 color: data.muted ? Tokens.ink-3 : Tokens.ink-2;
-                font-family: "Noto Sans Mono";
+                font-family: "JetBrains Mono";
                 font-size: 10px;
                 vertical-alignment: center;
             }
@@ -149,7 +284,7 @@ component TopicChannel inherits Rectangle {
                 Text {
                     text: "M";
                     color: data.muted ? #FFFFFF : Tokens.ink-2;
-                    font-family: "Noto Sans Mono";
+                    font-family: "JetBrains Mono";
                     font-size: 9px;
                     font-weight: 700;
                     horizontal-alignment: center;
@@ -193,7 +328,7 @@ component TopicChannel inherits Rectangle {
             }
             TouchArea {
                 clicked => {
-                    root.set-weight(self.mouse-x / self.width * 2.0);
+                root.set-weight(self.mouse-x / self.width * 3.0 - 1.0);
                 }
             }
         }
@@ -203,7 +338,7 @@ component TopicChannel inherits Rectangle {
 component EvidencePanel inherits Rectangle {
     in property <EvidenceRow> data;
 
-    height: 258px;
+    height: 280px;
     border-radius: 9px;
     background: Tokens.raised;
     border-width: 1px;
@@ -218,44 +353,43 @@ component EvidencePanel inherits Rectangle {
             Text {
                 text: data.z-score;
                 color: Tokens.accent;
-                font-family: "Noto Sans Mono";
+                font-family: "JetBrains Mono";
                 font-size: 10px;
                 font-weight: 700;
             }
         }
 
         Rectangle {
-            height: 58px;
-            background: transparent;
-            Rectangle {
-                x: 0;
-                y: 43px;
-                width: parent.width;
-                height: 1px;
-                background: Tokens.line;
-            }
-            Text {
-                text: data.sparkline;
-                color: Tokens.accent;
-                font-family: "Noto Sans Mono";
-                font-size: 30px;
-                vertical-alignment: bottom;
-                letter-spacing: 3px;
+            height: 72px;
+            background: Tokens.inset;
+            border-radius: 7px;
+            SparkChart {
+                x: 8px;
+                y: 7px;
+                width: parent.width - 16px;
+                height: 51px;
+                large: true;
+                tone: Tokens.accent;
+                line-path: data.spark-line;
+                area-path: data.spark-area;
+                end-x: data.spark-end-x;
+                end-y: data.spark-end-y;
+                baseline-y: data.baseline-y;
             }
             Text {
                 text: "7-day baseline";
-                x: parent.width - self.width;
-                y: 45px;
+                x: parent.width - self.width - 8px;
+                y: 58px;
                 color: Tokens.ink-3;
-                font-family: "Noto Sans Mono";
+                font-family: "JetBrains Mono";
                 font-size: 8px;
             }
         }
 
         HorizontalLayout {
             spacing: 15px;
-            Text { text: data.velocity; color: Tokens.ink-2; font-family: "Noto Sans Mono"; font-size: 9.5px; }
-            Text { text: data.baseline; color: Tokens.ink-3; font-family: "Noto Sans Mono"; font-size: 9.5px; }
+            Text { text: data.velocity; color: Tokens.ink-2; font-family: "JetBrains Mono"; font-size: 9.5px; }
+            Text { text: data.baseline; color: Tokens.ink-3; font-family: "JetBrains Mono"; font-size: 9.5px; }
         }
 
         Rectangle {
@@ -278,9 +412,9 @@ component EvidencePanel inherits Rectangle {
         }
 
         Text {
-            text: "score = recent velocity ÷ seven-day baseline";
+            text: "rank = trend × interest · trend = velocity × (1 + z⁺/4) + sources/2";
             color: Tokens.ink-3;
-            font-family: "Noto Sans Mono";
+            font-family: "JetBrains Mono";
             font-size: 8.5px;
         }
     }
@@ -298,7 +432,7 @@ component DigestCard inherits Rectangle {
     callback explain();
     callback subscribe();
 
-    height: selected ? 366px : 84px;
+    height: selected ? 388px : 84px;
     border-radius: 12px;
     border-width: 1px;
     border-color: selected ? Tokens.accent : Tokens.line;
@@ -315,7 +449,7 @@ component DigestCard inherits Rectangle {
                 text: rank;
                 width: 20px;
                 color: Tokens.ink-3;
-                font-family: "Noto Sans Mono";
+                font-family: "JetBrains Mono";
                 font-size: 12px;
                 font-weight: 700;
                 vertical-alignment: top;
@@ -356,27 +490,28 @@ component DigestCard inherits Rectangle {
                     Text {
                         text: selected ? "close" : "why?";
                         color: Tokens.ink-2;
-                        font-family: "Noto Sans Mono";
+                        font-family: "JetBrains Mono";
                         font-size: 9.5px;
                         TouchArea { clicked => { root.explain(); } }
                     }
                 }
             }
 
-            VerticalLayout {
-                width: 104px;
-                spacing: 4px;
-                Text {
-                    text: "▁▂▂▃▂▄▅▇";
-                    color: root.topic-color;
-                    font-family: "Noto Sans Mono";
-                    font-size: 17px;
-                    horizontal-alignment: right;
-                }
+                VerticalLayout {
+                    width: 104px;
+                    spacing: 4px;
+                    SparkChart {
+                        height: 34px;
+                        tone: root.topic-color;
+                        line-path: data.spark-line;
+                        area-path: data.spark-area;
+                        end-x: data.spark-end-x;
+                        end-y: data.spark-end-y;
+                    }
                 Text {
                     text: data.delta;
                     color: Tokens.ink-2;
-                    font-family: "Noto Sans Mono";
+                    font-family: "JetBrains Mono";
                     font-size: 9.5px;
                     font-weight: 700;
                     horizontal-alignment: right;
@@ -393,7 +528,7 @@ component DigestCard inherits Rectangle {
 component ChatMessage inherits Rectangle {
     in property <ChatRow> data;
 
-    height: data.role == "TOOL" ? 45px : 66px;
+    height: data.role == "TOOL" ? 45px : message-text.preferred-height + 20px;
     background: transparent;
 
     VerticalLayout {
@@ -413,18 +548,18 @@ component ChatMessage inherits Rectangle {
                 width: parent.width - 20px;
                 text: "↳ " + data.tool + "  ·  " + data.body;
                 color: Tokens.accent;
-                font-family: "Noto Sans Mono";
+                font-family: "JetBrains Mono";
                 font-size: 9px;
                 vertical-alignment: center;
                 overflow: elide;
             }
         }
-        if data.role != "TOOL": Text {
+        message-text := Text {
+            visible: data.role != "TOOL";
             text: data.body;
             color: Tokens.ink-2;
             font-size: 12px;
             wrap: word-wrap;
-            overflow: elide;
         }
     }
 }
@@ -436,7 +571,7 @@ export component AppWindow inherits Window {
     min-width: 1100px;
     min-height: 720px;
     background: Tokens.ground;
-    default-font-family: "Noto Sans";
+    default-font-family: "Instrument Sans";
 
     in-out property <[DigestRow]> digest;
     in-out property <[TopicRow]> topics;
@@ -444,6 +579,7 @@ export component AppWindow inherits Window {
     in-out property <[string]> tracked-topics;
     in-out property <string> tracked-summary: "Nothing tracked yet";
     in-out property <[string]> suggested-prompts;
+    in-out property <[string]> suggested-topics;
     in-out property <EvidenceRow> evidence;
     in-out property <bool> has-evidence: false;
     in-out property <bool> busy: false;
@@ -455,6 +591,10 @@ export component AppWindow inherits Window {
     callback explain-requested(string);
     callback subscribe-requested(string);
     callback send-message(string);
+
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+    }
 
     VerticalLayout {
         spacing: 0;
@@ -479,15 +619,49 @@ export component AppWindow inherits Window {
                     vertical-alignment: center;
                 }
                 Rectangle { horizontal-stretch: 1; background: transparent; }
+                theme-toggle := Rectangle {
+                    width: 72px;
+                    height: 22px;
+                    border-radius: 11px;
+                    border-width: 1px;
+                    border-color: Tokens.line-strong;
+                    background: Tokens.surface;
+                    Text {
+                        x: Tokens.dark ? 8px : 27px;
+                        width: 38px;
+                        text: Tokens.dark ? "DARK" : "LIGHT";
+                        color: Tokens.ink-2;
+                        font-family: "JetBrains Mono";
+                        font-size: 7.5px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    Rectangle {
+                        x: Tokens.dark ? parent.width - 19px : 4px;
+                        y: 4px;
+                        width: 13px;
+                        height: 13px;
+                        border-radius: 7px;
+                        background: Tokens.accent;
+                        animate x { duration: 120ms; easing: ease-in-out; }
+                    }
+                    TouchArea {
+                        clicked => {
+                            Tokens.dark = !Tokens.dark;
+                            Palette.color-scheme = Tokens.dark ? ColorScheme.dark : ColorScheme.light;
+                        }
+                    }
+                }
                 Rectangle {
                     width: 49px;
                     height: 20px;
                     border-radius: 10px;
-                    background: #DCEFE3;
+                    background: Tokens.ok-soft;
                     Text {
                         text: "●  LIVE";
                         color: Tokens.ok;
-                        font-family: "Noto Sans Mono";
+                        font-family: "JetBrains Mono";
                         font-size: 8px;
                         font-weight: 700;
                         horizontal-alignment: center;
@@ -526,7 +700,7 @@ export component AppWindow inherits Window {
                         height: 15px;
                         text: "trendforge  ·  6h window";
                         color: Tokens.ink-3;
-                        font-family: "Noto Sans Mono";
+                        font-family: "JetBrains Mono";
                         font-size: 9.5px;
                         letter-spacing: 0.5px;
                         horizontal-alignment: left;
@@ -536,28 +710,9 @@ export component AppWindow inherits Window {
                 Rectangle {
                     horizontal-stretch: 1;
                     background: transparent;
-                    Rectangle {
+                    PulseWave {
                         y: 20px;
                         height: 42px;
-                        background: transparent;
-                        Path {
-                            width: parent.width;
-                            height: parent.height;
-                            stroke: Tokens.line-strong;
-                            stroke-width: 2px;
-                            fill: transparent;
-                            commands: "M 0 25 L 24 25 L 35 21 L 45 28 L 57 25 L 78 25 L 88 5 L 101 39 L 113 18 L 124 25 L 149 25 L 159 22 L 169 27 L 181 25 L 210 25";
-                        }
-                        Path {
-                            x: 0;
-                            y: 24px;
-                            width: 39px;
-                            height: 2px;
-                            stroke: Tokens.accent;
-                            stroke-width: 2px;
-                            fill: transparent;
-                            commands: "M 0 1 L 39 1";
-                        }
                     }
                 }
 
@@ -570,7 +725,7 @@ export component AppWindow inherits Window {
                         height: 32px;
                         text: metric;
                         color: Tokens.ink-3;
-                        font-family: "Noto Sans Mono";
+                        font-family: "JetBrains Mono";
                         font-size: 8px;
                         horizontal-alignment: right;
                     }
@@ -621,7 +776,7 @@ export component AppWindow inherits Window {
                             height: 13px;
                             text: "your interests";
                             color: Tokens.ink-3;
-                            font-family: "Noto Sans Mono";
+                            font-family: "JetBrains Mono";
                             font-size: 8.5px;
                             horizontal-alignment: right;
                         }
@@ -654,25 +809,24 @@ export component AppWindow inherits Window {
                         height: 87px;
                         vertical-stretch: 0;
                         spacing: 6px;
-                        for topic in ["+ zig ▲2.2", "+ gpu-compute ▲1.4", "+ observability"]: Rectangle {
+                        for topic in root.suggested-topics: Rectangle {
                             height: 25px;
-                            width: topic == "+ gpu-compute ▲1.4" ? 132px : 112px;
+                            width: 132px;
                             border-radius: 12px;
                             border-width: 1px;
                             border-color: Tokens.line-strong;
                             background: transparent;
                             Text {
-                                text: topic;
+                                text: "+ " + topic;
                                 color: Tokens.ink-2;
-                                font-family: "Noto Sans Mono";
+                                font-family: "JetBrains Mono";
                                 font-size: 8.5px;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
                             }
                             TouchArea {
                                 clicked => {
-                                    root.subscribe-requested(topic == "+ zig ▲2.2" ? "zig" :
-                                        topic == "+ gpu-compute ▲1.4" ? "gpu-compute" : "observability");
+                                    root.set-interest(topic, 1.0);
                                 }
                             }
                         }
@@ -682,7 +836,7 @@ export component AppWindow inherits Window {
 
                     HorizontalLayout {
                         MonoLabel { text: "ATTENTION BUDGET"; horizontal-stretch: 1; }
-                        Text { text: "5 / 5"; color: Tokens.accent; font-family: "Noto Sans Mono"; font-size: 9px; font-weight: 700; }
+                        Text { text: "5 / 5"; color: Tokens.accent; font-family: "JetBrains Mono"; font-size: 9px; font-weight: 700; }
                     }
                     HorizontalLayout {
                         height: 7px;
@@ -707,7 +861,7 @@ export component AppWindow inherits Window {
                         Text {
                             text: "5 of 214 items surfaced  ·  today";
                             color: Tokens.ink-3;
-                            font-family: "Noto Sans Mono";
+                            font-family: "JetBrains Mono";
                             font-size: 8.5px;
                         }
                     }
@@ -740,7 +894,7 @@ export component AppWindow inherits Window {
 
                     HorizontalLayout {
                         MonoLabel { text: "PULSE AGENT"; horizontal-stretch: 1; }
-                        Text { text: "chat  ·  voice-ready"; color: Tokens.ink-3; font-family: "Noto Sans Mono"; font-size: 8.5px; }
+                        Text { text: "chat  ·  voice-ready"; color: Tokens.ink-3; font-family: "JetBrains Mono"; font-size: 8.5px; }
                     }
 
                     ScrollView {
@@ -841,15 +995,15 @@ export component AppWindow inherits Window {
                 for source in ["● hn", "● lobste.rs", "● producthunt"]: Text {
                     text: source;
                     color: Tokens.ok;
-                    font-family: "Noto Sans Mono";
+                    font-family: "JetBrains Mono";
                     font-size: 8.5px;
                 }
-                Text { text: "window 6h"; color: Tokens.ink-3; font-family: "Noto Sans Mono"; font-size: 8.5px; }
-                Text { text: "engine 0.1.0"; color: Tokens.ink-3; font-family: "Noto Sans Mono"; font-size: 8.5px; }
+                Text { text: "window 6h"; color: Tokens.ink-3; font-family: "JetBrains Mono"; font-size: 8.5px; }
+                Text { text: "engine 0.1.0"; color: Tokens.ink-3; font-family: "JetBrains Mono"; font-size: 8.5px; }
                 Text {
                     text: root.status;
                     color: Tokens.ink-3;
-                    font-family: "Noto Sans Mono";
+                    font-family: "JetBrains Mono";
                     font-size: 8.5px;
                     horizontal-alignment: right;
                     overflow: elide;

@@ -132,18 +132,23 @@ impl PulseState {
     }
 
     pub fn append_to_chat(&self, id: u64, delta: &str) {
-        let mut messages = self.context.get(&self.chat);
-        if let Some(message) = messages.iter_mut().find(|message| message.id == id) {
-            message.body.push_str(delta);
-            self.context.set(&self.chat, messages);
-        }
+        self.context.batch(|context| {
+            let mut messages = context.get(&self.chat);
+            if let Some(message) = messages.iter_mut().find(|message| message.id == id) {
+                message.body.push_str(delta);
+                context.set(&self.chat, messages);
+            }
+        });
     }
 
     pub fn replace_chat(&self, id: u64, body: impl Into<String>) {
-        let mut messages = self.context.get(&self.chat);
-        if let Some(message) = messages.iter_mut().find(|message| message.id == id) {
-            message.body = body.into();
-            self.context.set(&self.chat, messages);
-        }
+        let body = body.into();
+        self.context.batch(|context| {
+            let mut messages = context.get(&self.chat);
+            if let Some(message) = messages.iter_mut().find(|message| message.id == id) {
+                message.body = body;
+                context.set(&self.chat, messages);
+            }
+        });
     }
 }

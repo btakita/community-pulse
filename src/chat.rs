@@ -158,10 +158,16 @@ impl ChatSession {
                     "role": "assistant",
                     "content": if turn.content.is_empty() { Value::Null } else { Value::String(turn.content) },
                     "tool_calls": assistant_calls
-                }));
+        }));
 
             for call in turn.tool_calls {
-                let result = self.bridge.call(&call.name, &call.arguments)?;
+                let result = match self.bridge.call(&call.name, &call.arguments) {
+                    Ok(result) => result,
+                    Err(error) => json!({
+                        "error": true,
+                        "message": format!("{error:#}"),
+                    }),
+                };
                 emit(ChatEvent::ToolCall {
                     name: call.name.clone(),
                     result: result.clone(),

@@ -34,7 +34,7 @@ impl ToolBridge {
 
     pub fn get_pulse(&self, limit: Option<usize>) -> Result<Value> {
         let engine = self.engine.lock().expect("pulse engine lock poisoned");
-        let cards = engine.get_pulse(&self.state.interests(), limit)?;
+        let cards = engine.get_pulse(&self.state.interests(), limit, Utc::now())?;
         self.state.set_digest(cards.clone());
         Ok(json!({
             "attention_budget": ATTENTION_BUDGET,
@@ -46,7 +46,8 @@ impl ToolBridge {
     pub fn refresh_scores(&self) -> Result<Value> {
         let mut engine = self.engine.lock().expect("pulse engine lock poisoned");
         engine.recompute(Utc::now())?;
-        let cards = engine.get_pulse(&self.state.interests(), Some(ATTENTION_BUDGET))?;
+        let cards =
+            engine.get_pulse(&self.state.interests(), Some(ATTENTION_BUDGET), Utc::now())?;
         let suggested = engine.suggested_topics(8)?;
         self.state.set_digest(cards.clone());
         self.state.set_suggested_topics(suggested);
@@ -67,7 +68,7 @@ impl ToolBridge {
             engine.set_interest(&topic, -1.0)?;
         }
         self.state.set_interests(interests.clone());
-        let cards = engine.get_pulse(&interests, Some(ATTENTION_BUDGET))?;
+        let cards = engine.get_pulse(&interests, Some(ATTENTION_BUDGET), Utc::now())?;
         self.state.set_digest(cards.clone());
         Ok(json!({ "interests": interests, "digest": cards }))
     }
@@ -78,7 +79,7 @@ impl ToolBridge {
         interests.set(&topic, weight);
         let engine = self.engine.lock().expect("pulse engine lock poisoned");
         engine.set_interest(&topic, weight)?;
-        let cards = engine.get_pulse(&interests, Some(ATTENTION_BUDGET))?;
+        let cards = engine.get_pulse(&interests, Some(ATTENTION_BUDGET), Utc::now())?;
         self.state.set_interests(interests.clone());
         self.state.set_digest(cards.clone());
         Ok(json!({ "topic": topic, "weight": weight, "digest": cards }))
