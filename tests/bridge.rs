@@ -147,6 +147,32 @@ fn research_reports_round_trip_and_update_shared_state() {
 }
 
 #[test]
+fn research_submission_reconciles_agent_display_name_with_running_family() {
+    let bridge = fixture_bridge();
+    let run_id = bridge.start_research_run("privacy", "claude");
+
+    bridge
+        .submit_research(
+            "privacy",
+            "Claude (Opus 4.8)",
+            "Privacy research",
+            "## Verdict\n\nOrganic.",
+            &[],
+            None,
+        )
+        .unwrap();
+
+    let run = bridge
+        .snapshot()
+        .research_runs
+        .into_iter()
+        .find(|run| run.id == run_id)
+        .unwrap();
+    assert_eq!(run.status, "done");
+    assert_eq!(run.progress, "Report submitted");
+}
+
+#[test]
 fn research_reads_are_unbudgeted_and_expose_posts_and_series() {
     let bridge = fixture_bridge();
     bridge.get_pulse(Some(3)).unwrap();

@@ -290,3 +290,7 @@ trigger and R4's `--live` timer call — one code path, two triggers.
 3. `make demo` and compare side-by-side against `mockup-desktop.html` in a
    browser: fonts, channel strips, card sparklines (each card different),
    evidence panel caption, tool chips.
+4. `make demo-shots` rebuilds and writes deterministic desktop/mobile pulse,
+   evidence-open, and rotated-mobile captures under `demo/shots/`. Compare those
+   captures with `mockup-desktop.html`, `mockup-mobile.html`, and the interaction
+   specs in this directory before committing visual changes.

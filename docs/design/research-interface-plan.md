@@ -26,6 +26,8 @@ restore.
 - [x] Follow-on queue: zero-ritual startup/setup/agent terminals, structured
 verdict/summary/watch enrichment, and user-initiated article briefs with native
 sections plus markdown fallback.
+- [x] Demo polish: terminal pidfile/process-group lifecycle, agent-family run
+reconciliation, and markdown-lite fallback that normalizes all ATX heading levels.
 - [ ] Needs human review: real subscription logins/quota, presentation-machine
 doctor, live-provider timing, and final fallback assets. These are rehearsal,
 not code blockers.
@@ -33,6 +35,11 @@ not code blockers.
 i3 floating-rule pass; optional R5 remote client.
 
 ## Punch: report view renders plain text — implement markdown-lite (operator feedback)
+
+**Status: implemented.** Topic reports and structured-section bodies now use
+Slint `StyledText`; ATX headings `#` through `######` are normalized into the
+supported markdown-lite subset so an unsupported `###` cannot force the entire
+report back to literal source text.
 
 The shipped report view shows raw markdown as plain text. Implement the
 R2 renderer as specced: parse the subset — `#`/`##` headings, `**bold**`,
@@ -316,6 +323,12 @@ claude|codex`, ~1 day, do NOT build before the panel):
 
 ## Agent terminal lifecycle (bug) + in-app console direction
 
+**Status: implemented.** The optional companion terminal is guarded by the
+runtime pidfile, spawned in its own process group, and reaped with the app. The
+research subprocess remains independent. Submitted reports reconcile to the
+newest running job by topic and Claude/Codex agent family, so display names such
+as `Claude (Opus 4.8)` cannot be misreported as a clean-exit failure.
+
 **Bug (operator observed): each app instance spawns an extra external
 terminal and they accumulate.** Fix the `--agent-terminal` lifecycle:
 
@@ -460,8 +473,9 @@ Pinned decisions (do not re-litigate during implementation):
   String, markdown: String, citations: Vec<Citation{url, note:
   Option<String>}>, web_report: Option<String>, created_at, status }`.
 - Run↔report correlation: on submit, mark the newest `running` run for
-  (topic_id, agent) as `done`; if none, the report stands alone (CLI-
-  initiated research is legal without a run row).
+(topic_id, agent family) as `done`; display labels such as `Claude (Opus 4.8)`
+match a `claude` run. If none, the report stands alone (CLI-
+initiated research is legal without a run row).
 - Markdown-lite subset: `#`/`##` headings, `**bold**`, `- ` bullets,
   `[text](url)` links, `` `code` `` spans. Everything else renders as
   plain text — no tables, no images, no nesting.

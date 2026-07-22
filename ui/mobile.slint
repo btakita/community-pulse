@@ -3,6 +3,7 @@ import "fonts/InstrumentSans[wdth,wght].ttf";
 import "fonts/JetBrainsMono[wght].ttf";
 import { DigestRow, TopicRow, ChatRow, EvidencePostRow, EvidenceRow } from "models.slint";
 import { Tokens } from "theme.slint";
+import { ChevronIconButton, CloseIconButton } from "icons.slint";
 
 component MobileMonoLabel inherits Text {
     color: Tokens.ink-3;
@@ -58,6 +59,7 @@ component MobileSpark inherits Rectangle {
 component MobileDigestCard inherits Rectangle {
     in property <DigestRow> data;
     in property <int> rank;
+    in property <bool> selected: false;
     in property <color> topic-color: data.id == "rust" ? Tokens.rust :
         data.id == "local-first" ? Tokens.local :
         data.id == "ai-infra" ? Tokens.ai :
@@ -69,7 +71,7 @@ component MobileDigestCard inherits Rectangle {
     height: 112px;
     border-radius: 14px;
     border-width: 1px;
-    border-color: Tokens.line;
+    border-color: root.selected ? Tokens.accent : Tokens.line;
     background: Tokens.surface;
 
     Text {
@@ -175,17 +177,11 @@ component MobileDigestCard inherits Rectangle {
         vertical-alignment: center;
         TouchArea { clicked => { root.subscribe(); } }
     }
-    Text {
-        x: parent.width - 45px;
-        y: 78px;
-        width: 33px;
-        height: 20px;
-        text: "why?";
-        color: Tokens.ink-2;
-        font-family: "JetBrains Mono";
-        font-size: 8px;
-        vertical-alignment: center;
-        TouchArea { clicked => { root.explain(); } }
+    ChevronIconButton {
+        x: parent.width - 42px;
+        y: 75px;
+        open: root.selected;
+        clicked => { root.explain(); }
     }
 }
 
@@ -463,12 +459,8 @@ component MobileEvidenceSheet inherits Rectangle {
         HorizontalLayout {
             height: 26px;
             MobileMonoLabel { text: "WHY THIS IS MOVING"; horizontal-stretch: 1; }
-            Text {
-                text: "close";
-                color: Tokens.ink-2;
-                font-family: "JetBrains Mono";
-                font-size: 9px;
-                TouchArea { clicked => { root.close(); } }
+            CloseIconButton {
+                clicked => { root.close(); }
             }
         }
         Text {
@@ -838,6 +830,7 @@ export component MobileWindow inherits Window {
                             width: pulse-list.width;
                             data: card;
                             rank: index + 1;
+                            selected: root.has-evidence && root.evidence.id == card.id;
                             explain => { root.explain-requested(card.id); }
                             subscribe => { root.subscribe-requested(card.id); }
                             open-url(url) => { root.open-url(url); }

@@ -5,7 +5,12 @@ use anyhow::{Context, Result, bail};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::thread;
+use std::time::Duration;
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use toml_edit::{Array, DocumentMut, Item, Table, value};
 
 pub const DEFAULT_MCP_PORT: u16 = 7432;
@@ -184,25 +189,174 @@ fn codex_entry_matches(document: &DocumentMut, endpoint: &str) -> bool {
     command_matches && args_match
 }
 
-pub fn spawn_agent_terminal(agent: ResearchAgent) -> Result<()> {
+pub struct AgentTerminal {
+    child: Option<Child>,
+    pid: u32,
+    pid_file: PathBuf,
+    owns_pid_file: bool,
+}
+
+impl AgentTerminal {
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    pub fn was_spawned(&self) -> bool {
+        self.child.is_some()
+    }
+}
+
+impl Drop for AgentTerminal {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            terminate_process_group(&mut child, self.pid);
+        }
+        if self.owns_pid_file && pid_file_matches(&self.pid_file, self.pid) {
+            let _ = fs::remove_file(&self.pid_file);
+        }
+    }
+}
+
+pub fn spawn_agent_terminal(agent: ResearchAgent) -> Result<AgentTerminal> {
     let terminal = env::var_os("TERMINAL")
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "i3-sensible-terminal".into());
-    Command::new(&terminal)
+    let runtime_dir = env::var_os("XDG_RUNTIME_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(env::temp_dir);
+    spawn_agent_terminal_at(
+        agent,
+        Path::new(&terminal),
+        &runtime_dir.join("pulse-agent-term.pid"),
+    )
+}
+
+fn spawn_agent_terminal_at(
+    agent: ResearchAgent,
+    terminal: &Path,
+    pid_file: &Path,
+) -> Result<AgentTerminal> {
+    if let Some(pid) = reusable_terminal_pid(pid_file)? {
+        return Ok(AgentTerminal {
+            child: None,
+            pid,
+            pid_file: pid_file.to_owned(),
+            owns_pid_file: false,
+        });
+    }
+
+    if let Some(parent) = pid_file.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create terminal runtime directory {}", parent.display()))?;
+    }
+
+    let mut command = Command::new(terminal);
+    command
         .arg("-e")
         .arg(agent.as_str())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .with_context(|| {
-            format!(
-                "launch {} in terminal {}",
-                agent.as_str(),
-                PathBuf::from(terminal).display()
-            )
-        })?;
-    Ok(())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    command.process_group(0);
+
+    let child = command.spawn().with_context(|| {
+        format!(
+            "launch {} in terminal {}",
+            agent.as_str(),
+            terminal.display()
+        )
+    })?;
+    let pid = child.id();
+    let mut terminal = AgentTerminal {
+        child: Some(child),
+        pid,
+        pid_file: pid_file.to_owned(),
+        owns_pid_file: false,
+    };
+    fs::write(pid_file, format!("{pid}\n"))
+        .with_context(|| format!("write terminal pidfile {}", pid_file.display()))?;
+    terminal.owns_pid_file = true;
+    Ok(terminal)
+}
+
+fn reusable_terminal_pid(pid_file: &Path) -> Result<Option<u32>> {
+    let contents = match fs::read_to_string(pid_file) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("read terminal pidfile {}", pid_file.display()));
+        }
+    };
+    if let Ok(pid) = contents.trim().parse::<u32>()
+        && process_is_alive(pid)
+    {
+        return Ok(Some(pid));
+    }
+    fs::remove_file(pid_file)
+        .with_context(|| format!("remove stale terminal pidfile {}", pid_file.display()))?;
+    Ok(None)
+}
+
+fn pid_file_matches(pid_file: &Path, pid: u32) -> bool {
+    fs::read_to_string(pid_file)
+        .ok()
+        .and_then(|contents| contents.trim().parse::<u32>().ok())
+        == Some(pid)
+}
+
+#[cfg(unix)]
+fn process_is_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: signal 0 performs existence/permission checking only.
+    (unsafe { libc::kill(pid, 0) == 0 })
+        || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
+#[cfg(not(unix))]
+fn process_is_alive(pid: u32) -> bool {
+    Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+        .output()
+        .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()))
+}
+
+#[cfg(unix)]
+fn signal_process_group(pid: u32, signal: i32) {
+    if let Ok(pid) = i32::try_from(pid) {
+        // SAFETY: the negative pid targets the process group created for the child.
+        unsafe {
+            libc::kill(-pid, signal);
+        }
+    }
+}
+
+fn terminate_process_group(child: &mut Child, pid: u32) {
+    #[cfg(unix)]
+    signal_process_group(pid, libc::SIGTERM);
+    #[cfg(not(unix))]
+    let _ = child.kill();
+
+    for _ in 0..20 {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => thread::sleep(Duration::from_millis(25)),
+            Err(_) => return,
+        }
+    }
+
+    #[cfg(unix)]
+    signal_process_group(pid, libc::SIGKILL);
+    #[cfg(not(unix))]
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 #[cfg(test)]
@@ -279,6 +433,57 @@ mod tests {
         assert_eq!(
             fs::read_to_string(capture).unwrap(),
             "mcp\nadd\n-s\nuser\n--transport\nhttp\npulse\nhttp://127.0.0.1:7432/mcp\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agent_terminal_is_reused_and_reaped_with_the_app() {
+        let directory = tempfile::tempdir().unwrap();
+        let terminal = directory.path().join("terminal");
+        let pid_file = directory.path().join("pulse-agent-term.pid");
+        fs::write(
+            &terminal,
+            "#!/bin/sh\ntrap 'exit 0' TERM\nwhile :; do sleep 1; done\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&terminal).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&terminal, permissions).unwrap();
+
+        let first = spawn_agent_terminal_at(ResearchAgent::Claude, &terminal, &pid_file).unwrap();
+        assert!(first.was_spawned());
+        assert!(process_is_alive(first.pid()));
+        let second = spawn_agent_terminal_at(ResearchAgent::Codex, &terminal, &pid_file).unwrap();
+        assert!(!second.was_spawned());
+        assert_eq!(second.pid(), first.pid());
+
+        drop(second);
+        assert!(process_is_alive(first.pid()));
+        let pid = first.pid();
+        drop(first);
+        assert!(!process_is_alive(pid));
+        assert!(!pid_file.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stale_agent_terminal_pidfile_is_replaced() {
+        let directory = tempfile::tempdir().unwrap();
+        let terminal = directory.path().join("terminal");
+        let pid_file = directory.path().join("pulse-agent-term.pid");
+        fs::write(&terminal, "#!/bin/sh\ntrap 'exit 0' TERM\nsleep 30\n").unwrap();
+        let mut permissions = fs::metadata(&terminal).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&terminal, permissions).unwrap();
+        fs::write(&pid_file, format!("{}\n", i32::MAX)).unwrap();
+
+        let terminal =
+            spawn_agent_terminal_at(ResearchAgent::Claude, &terminal, &pid_file).unwrap();
+        assert!(terminal.was_spawned());
+        assert_eq!(
+            fs::read_to_string(&pid_file).unwrap().trim(),
+            terminal.pid().to_string()
         );
     }
 }

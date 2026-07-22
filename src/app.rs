@@ -94,9 +94,11 @@ pub fn run(
     if let Some(port) = mcp_port {
         start_mcp(bridge.clone(), targets.clone(), port);
     }
+    let mut agent_terminal_guards = Vec::new();
     for agent in agent_terminals {
-        if let Err(error) = setup::spawn_agent_terminal(*agent) {
-            eprintln!("agent terminal: {error:#}");
+        match setup::spawn_agent_terminal(*agent) {
+            Ok(terminal) => agent_terminal_guards.push(terminal),
+            Err(error) => eprintln!("agent terminal: {error:#}"),
         }
     }
     if let Some(policy) = live_policy {
@@ -107,15 +109,17 @@ pub fn run(
         );
     }
 
-    match (desktop_window, mobile_window) {
+    let run_result = match (desktop_window, mobile_window) {
         (Some(desktop), Some(mobile)) => {
             mobile.show()?;
-            desktop.run()?;
+            desktop.run()
         }
-        (Some(desktop), None) => desktop.run()?,
-        (None, Some(mobile)) => mobile.run()?,
+        (Some(desktop), None) => desktop.run(),
+        (None, Some(mobile)) => mobile.run(),
         (None, None) => unreachable!("every view mode creates at least one window"),
-    }
+    };
+    drop(agent_terminal_guards);
+    run_result?;
     Ok(())
 }
 
@@ -1106,7 +1110,7 @@ fn research_section_rows(report: &ResearchReport) -> Vec<ResearchSectionRow> {
                 _ => "SECTION",
             }
             .into(),
-            body: section.body.clone().into(),
+            body: styled_markdown(&section.body),
             quotes: model(
                 section
                     .quotes
@@ -1158,10 +1162,16 @@ fn markdown_lite(markdown: &str) -> String {
                 .replace('&', "&amp;")
                 .replace('<', "&lt;")
                 .replace('>', "&gt;");
-            if let Some(heading) = escaped.strip_prefix("# ") {
-                format!("<u>**{heading}**</u>")
-            } else if let Some(heading) = escaped.strip_prefix("## ") {
-                format!("**{heading}**")
+            let heading_depth = escaped.bytes().take_while(|byte| *byte == b'#').count();
+            if (1..=6).contains(&heading_depth)
+                && escaped.as_bytes().get(heading_depth) == Some(&b' ')
+            {
+                let heading = &escaped[heading_depth + 1..];
+                if heading_depth == 1 {
+                    format!("<u>**{heading}**</u>")
+                } else {
+                    format!("**{heading}**")
+                }
             } else if escaped.starts_with("![")
                 || escaped.starts_with('|')
                 || escaped.starts_with("```")
@@ -1545,14 +1555,17 @@ mod tests {
     #[test]
     fn markdown_lite_keeps_supported_inline_markup_and_normalizes_headings() {
         let rendered = markdown_lite(
-            "# Finding\n## Detail\n- **organic** spike with `code` and [source](https://example.com)\n![ignored](x.png)",
+            "# Finding\n## Detail\n### The spike\n- **organic** spike with `code` and [source](https://example.com)\n![ignored](x.png)",
         );
 
         assert!(rendered.contains("<u>**Finding**</u>"));
         assert!(rendered.contains("**Detail**"));
+        assert!(rendered.contains("**The spike**"));
+        assert!(!rendered.contains("###"));
         assert!(rendered.contains("- **organic** spike with `code`"));
         assert!(rendered.contains("[source](https://example.com)"));
         assert!(rendered.contains("\\![ignored](x.png)"));
+        slint::StyledText::from_markdown(&rendered).unwrap();
     }
 
     #[test]

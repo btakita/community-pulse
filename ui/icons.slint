@@ -1,0 +1,56 @@
+import { Tokens } from "theme.slint";
+
+export component ChevronIconButton inherits Rectangle {
+    in property <bool> open: false;
+    callback clicked();
+
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: root.open ? Tokens.accent : (touch.has-hover ? Tokens.ink-3 : Tokens.line-strong);
+    background: touch.has-hover ? (root.open ? Tokens.accent-soft : Tokens.raised) : Tokens.surface;
+
+    Image {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 12px;
+        height: 12px;
+        source: @image-url("icons/chevron.svg");
+        image-fit: contain;
+        colorize: root.open ? Tokens.accent : Tokens.ink-2;
+        transform-rotation: root.open ? 180deg : 0deg;
+        animate transform-rotation { duration: 150ms; easing: ease-in-out; }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component CloseIconButton inherits Rectangle {
+    callback clicked();
+
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: touch.has-hover ? Tokens.ink-3 : Tokens.line-strong;
+    background: touch.has-hover ? Tokens.raised : Tokens.surface;
+
+    Image {
+        x: 7px;
+        y: 7px;
+        width: 12px;
+        height: 12px;
+        source: @image-url("icons/close.svg");
+        image-fit: contain;
+        colorize: Tokens.ink-2;
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}

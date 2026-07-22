@@ -2,6 +2,10 @@
 
 ## Affordance update (operator feedback, do next): icons, not text links
 
+**Status: implemented on desktop and mobile.** Shared SVG chevron and close
+buttons provide 26px hit targets, open-state rotation/accent treatment, and an
+in-panel close control while selection remains derived from evidence state.
+
 The "why?" text link is not discoverable enough. Replace the text
 affordances with icon buttons:
 

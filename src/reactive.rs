@@ -200,7 +200,7 @@ impl PulseState {
             let mut runs = context.get(&self.research_runs);
             if let Some(run) = runs.iter_mut().rev().find(|run| {
                 run.topic_id == topic_id
-                    && run.agent.eq_ignore_ascii_case(agent)
+                    && research_agents_match(&run.agent, agent)
                     && run.status == "running"
             }) {
                 run.status = "done".to_owned();
@@ -346,4 +346,16 @@ impl PulseState {
             }
         });
     }
+}
+
+fn research_agents_match(run_agent: &str, submitted_agent: &str) -> bool {
+    if run_agent.eq_ignore_ascii_case(submitted_agent) {
+        return true;
+    }
+
+    let run_agent = run_agent.to_ascii_lowercase();
+    let submitted_agent = submitted_agent.to_ascii_lowercase();
+    ["claude", "codex"]
+        .iter()
+        .any(|family| run_agent.contains(family) && submitted_agent.contains(family))
 }

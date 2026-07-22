@@ -3,6 +3,7 @@ import "fonts/InstrumentSans[wdth,wght].ttf";
 import "fonts/JetBrainsMono[wght].ttf";
 import { DigestRow, TopicRow, ChatRow, EvidencePostRow, EvidenceRow, ResearchTitleRow, ResearchSummaryRow, SuggestedTopicRow, ResearchSectionRow, CitationRow, SourceStatusRow } from "models.slint";
 import { Tokens } from "theme.slint";
+import { ChevronIconButton, CloseIconButton } from "icons.slint";
 
 component MonoLabel inherits Text {
     color: Tokens.ink-3;
@@ -453,6 +454,7 @@ component EvidencePanel inherits Rectangle {
     callback select-research(int);
     callback research-requested(string);
     callback brief-requested(string, string);
+    callback close();
 
     height: panel-layout.preferred-height;
     background: transparent;
@@ -477,6 +479,9 @@ component EvidencePanel inherits Rectangle {
                 font-family: "JetBrains Mono";
                 font-size: 10px;
                 font-weight: 700;
+            }
+            CloseIconButton {
+                clicked => { root.close(); }
             }
         }
 
@@ -823,12 +828,16 @@ component DigestCard inherits Rectangle {
                     TouchArea { mouse-cursor: pointer; clicked => { root.view-research(data.research-id); } }
                 }
                 Text {
-                        text: selected ? "close" : "why?";
-                        color: Tokens.ink-2;
-                        font-family: "JetBrains Mono";
-                        font-size: 9.5px;
-                        TouchArea { clicked => { root.explain(); } }
-                    }
+                    text: "evidence";
+                    color: Tokens.ink-3;
+                    font-family: "JetBrains Mono";
+                    font-size: 8px;
+                    vertical-alignment: center;
+                }
+                ChevronIconButton {
+                    open: root.selected;
+                    clicked => { root.explain(); }
+                }
                 }
             }
 
@@ -897,6 +906,7 @@ component DigestCard inherits Rectangle {
             select-research(id) => { root.view-research(id); }
             research-requested(agent) => { root.research-requested(agent); }
             brief-requested(url, agent) => { root.brief-requested(url, agent); }
+            close => { root.explain(); }
         }
     }
 }
@@ -1056,11 +1066,13 @@ component ResearchReportPane inherits Rectangle {
                         padding: 8px;
                         spacing: 7px;
                         MonoLabel { text: section.heading; color: Tokens.accent; }
-                        Text {
+                        StyledText {
                             text: section.body;
-                            color: Tokens.ink-2;
-                            font-size: 10.5px;
-                            wrap: word-wrap;
+                            default-color: Tokens.ink-2;
+                            default-font-family: "Instrument Sans";
+                            default-font-size: 10.5px;
+                            link-color: Tokens.accent;
+                            link-clicked(link) => { root.open-url(link); }
                         }
                         for quote in section.quotes: Rectangle {
                             height: quote-text.preferred-height + 28px;

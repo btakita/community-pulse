@@ -35,6 +35,11 @@ DPI scaling so its custom phone chrome stays legible on HiDPI displays. Use
 `--companion` (or `make demo-companion`) when you want synchronized desktop and
 phone windows.
 
+Run `make demo-shots` for deterministic Xvfb captures of the desktop,
+expanded-evidence, mobile portrait, and mobile landscape states. The images are
+written to `demo/shots/` for comparison with
+`docs/design/mockup-desktop.html` and `docs/design/mockup-mobile.html`.
+
 Pulse / Mix / Agent use the same bridge and row models. Fixture data drives
 previous-snapshot delta chips plus a tracked-topic threshold alert. Digest
 headlines and evidence rows route to their original community source in the

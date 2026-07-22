@@ -1,4 +1,4 @@
-.PHONY: check fmt clippy test demo demo-mobile demo-companion
+.PHONY: check fmt clippy test build demo demo-mobile demo-companion demo-shots
 
 check: fmt clippy test
 
@@ -11,6 +11,9 @@ clippy:
 test:
 	cargo test --all-features
 
+build:
+	cargo build --all-features
+
 demo:
 	cargo run -- --fixture --replay app
 
@@ -19,3 +22,6 @@ demo-mobile:
 
 demo-companion:
 	cargo run -- --fixture --replay app --companion
+
+demo-shots: build
+	xvfb-run -a -s "-screen 0 1920x1080x24" ./scripts/capture-demo-shots.sh
