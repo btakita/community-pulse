@@ -1,0 +1,317 @@
+import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+
+export struct DigestRow {
+    id: string,
+    topic: string,
+    headline: string,
+    sources: string,
+    score: string,
+    delta: string,
+    mentions: string,
+}
+
+export struct TopicRow {
+    id: string,
+    topic: string,
+    weight: string,
+    state: string,
+    weight-value: float,
+    active: bool,
+    muted: bool,
+}
+
+export struct ChatRow {
+    role: string,
+    body: string,
+    tool: string,
+}
+
+export struct EvidenceRow {
+    topic: string,
+    velocity: string,
+    baseline: string,
+    z-score: string,
+    sparkline: string,
+    posts: string,
+}
+
+component Label inherits Text {
+    color: #8791a8;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.4px;
+}
+
+component TopicControl inherits Rectangle {
+    in property <TopicRow> data;
+    callback set-weight(float);
+    height: 56px;
+    border-radius: 8px;
+    background: data.muted ? #241c2a : (data.active ? #172c2b : #171b25);
+    border-width: 1px;
+    border-color: data.muted ? #7b496f : (data.active ? #3db9a7 : #2a3040);
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 8px;
+        spacing: 7px;
+        VerticalLayout {
+            alignment: center;
+            Text { text: data.topic; color: #eef2ff; font-size: 13px; font-weight: 600; }
+            Text { text: data.state + "  " + data.weight; color: #8791a8; font-size: 10px; }
+        }
+        Button {
+            text: "+";
+            width: 34px;
+            clicked => {
+                root.set-weight(data.weight-value >= 2.0 ? 0.0 : (data.weight-value > 0.0 ? data.weight-value + 0.5 : 0.5));
+            }
+        }
+        Button { text: "×"; width: 34px; clicked => { root.set-weight(data.muted ? 0.0 : -1.0); } }
+    }
+}
+
+component DigestTile inherits Rectangle {
+    in property <DigestRow> data;
+    callback explain();
+    callback subscribe();
+    height: 132px;
+    border-radius: 10px;
+    background: #151a24;
+    border-width: 1px;
+    border-color: #2a3344;
+
+    VerticalLayout {
+        padding: 13px;
+        spacing: 7px;
+        HorizontalLayout {
+            Text { text: data.topic; color: #58d4c2; font-size: 11px; font-weight: 800; letter-spacing: 1px; }
+            Rectangle { horizontal-stretch: 1; background: transparent; }
+            Text { text: data.delta; color: #85e89d; font-family: "JetBrains Mono"; font-size: 11px; }
+            Text { text: data.score; color: #f3b95f; font-family: "JetBrains Mono"; font-size: 16px; font-weight: 700; }
+        }
+        Text {
+            text: data.headline;
+            color: #f2f4fa;
+            font-size: 15px;
+            font-weight: 600;
+            wrap: word-wrap;
+            max-height: 38px;
+        }
+        HorizontalLayout {
+            Text { text: data.sources + "  ·  " + data.mentions; color: #8791a8; font-size: 10px; horizontal-stretch: 1; }
+            Button { text: "Track"; width: 62px; clicked => { root.subscribe(); } }
+            Button { text: "Why?"; width: 62px; clicked => { root.explain(); } }
+        }
+    }
+}
+
+component ChatBubble inherits Rectangle {
+    in property <ChatRow> data;
+    height: body-text.preferred-height + (data.tool == "" ? 24px : 49px);
+    border-radius: 9px;
+    background: data.role == "you" ? #1b3241 : (data.role == "tool" ? #25213a : #181e2a);
+    border-width: 1px;
+    border-color: data.role == "you" ? #30647a : (data.role == "tool" ? #665a9b : #2b3447);
+
+    VerticalLayout {
+        padding: 10px;
+        spacing: 6px;
+        Text { text: data.role; color: data.role == "YOU" ? #64d1ec : #a99eea; font-size: 9px; font-weight: 800; letter-spacing: 1px; }
+        body-text := Text { text: data.body; color: #e4e8f2; font-size: 12px; wrap: word-wrap; }
+        Rectangle {
+            visible: data.tool != "";
+            height: 22px;
+            border-radius: 11px;
+            background: #302a49;
+            Text { text: "↳ " + data.tool; color: #c7bffa; font-family: "JetBrains Mono"; font-size: 9px; vertical-alignment: center; x: 8px; }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Community Pulse";
+    preferred-width: 1480px;
+    preferred-height: 900px;
+    min-width: 1100px;
+    min-height: 720px;
+    background: #0c1018;
+    default-font-family: "Instrument Sans";
+
+    in-out property <[DigestRow]> digest;
+    in-out property <[TopicRow]> topics;
+    in-out property <[ChatRow]> chat;
+    in-out property <[string]> tracked-topics;
+    in-out property <string> tracked-summary: "Nothing tracked yet";
+    in-out property <[string]> suggested-prompts;
+    in-out property <EvidenceRow> evidence;
+    in-out property <bool> has-evidence: false;
+    in-out property <bool> busy: false;
+    in-out property <string> status: "";
+    private property <string> chat-input: "";
+
+    callback refresh-requested();
+    callback set-interest(string, float);
+    callback explain-requested(string);
+    callback subscribe-requested(string);
+    callback send-message(string);
+
+    VerticalLayout {
+        padding: 18px;
+        spacing: 14px;
+
+        Rectangle {
+            height: 58px;
+            border-radius: 10px;
+            background: #121722;
+            border-width: 1px;
+            border-color: #273043;
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 12px;
+                VerticalLayout {
+                    alignment: center;
+                    Text { text: "COMMUNITY PULSE"; color: #f5f7ff; font-size: 20px; font-weight: 800; letter-spacing: 1.4px; }
+                    Text { text: "signal ingestion → interest model → five-card attention budget"; color: #738098; font-size: 10px; }
+                }
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                Text { text: root.status; color: #58d4c2; font-family: "JetBrains Mono"; font-size: 11px; vertical-alignment: center; }
+                Button { text: root.busy ? "Working…" : "Refresh"; enabled: !root.busy; width: 92px; clicked => { root.refresh-requested(); } }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 14px;
+
+            Rectangle {
+                width: 280px;
+                border-radius: 10px;
+                background: #111620;
+                border-width: 1px;
+                border-color: #273043;
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 10px;
+                    Label { text: "INTEREST MIXER"; }
+                    Text { text: "Boost +  ·  mute ×"; color: #68748a; font-size: 10px; }
+                    ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            spacing: 8px;
+                            for topic in root.topics: TopicControl {
+                                data: topic;
+                                set-weight(weight) => { root.set-interest(topic.id, weight); }
+                            }
+                        }
+                    }
+                    Label { text: "TRACKED"; }
+                    Text {
+                        text: root.tracked-summary;
+                        color: #b5bfd3;
+                        font-size: 11px;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+                border-radius: 10px;
+                background: #10151e;
+                border-width: 1px;
+                border-color: #273043;
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 10px;
+                    HorizontalLayout {
+                        Label { text: "TODAY'S CAPPED DIGEST"; horizontal-stretch: 1; }
+                        Text { text: root.digest.length + " / 5"; color: #f3b95f; font-family: "JetBrains Mono"; font-size: 11px; }
+                    }
+                    ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            spacing: 9px;
+                            for card in root.digest: DigestTile {
+                                data: card;
+                                explain => { root.explain-requested(card.id); }
+                                subscribe => { root.subscribe-requested(card.id); }
+                            }
+                        }
+                    }
+                    Rectangle {
+                        visible: root.has-evidence;
+                        height: root.has-evidence ? 172px : 0px;
+                        border-radius: 9px;
+                        background: #111d25;
+                        border-width: 1px;
+                        border-color: #285563;
+                        VerticalLayout {
+                            padding: 12px;
+                            spacing: 7px;
+                            HorizontalLayout {
+                                Label { text: "EVIDENCE · " + root.evidence.topic; horizontal-stretch: 1; }
+                                Text { text: root.evidence.z-score; color: #64d1ec; font-family: "JetBrains Mono"; font-size: 11px; }
+                            }
+                            Text { text: root.evidence.sparkline; color: #58d4c2; font-family: "JetBrains Mono"; font-size: 25px; letter-spacing: 3px; }
+                            Text { text: root.evidence.velocity + "  ·  " + root.evidence.baseline; color: #aeb8cc; font-size: 10px; }
+                            Text { text: root.evidence.posts; color: #8791a8; font-size: 10px; wrap: word-wrap; max-height: 44px; }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                width: 370px;
+                border-radius: 10px;
+                background: #111620;
+                border-width: 1px;
+                border-color: #273043;
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 10px;
+                    Label { text: "AGENT CHAT · SHARED TOOLS"; }
+                    ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            spacing: 8px;
+                            for message in root.chat: ChatBubble { data: message; }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        for prompt in root.suggested-prompts: Button {
+                            text: prompt;
+                            height: 30px;
+                            clicked => { root.send-message(prompt); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        LineEdit {
+                            horizontal-stretch: 1;
+                            placeholder-text: "What's the pulse today?";
+                            text <=> root.chat-input;
+                            accepted => {
+                                if (root.chat-input != "") {
+                                    root.send-message(root.chat-input);
+                                    root.chat-input = "";
+                                }
+                            }
+                        }
+                        Button {
+                            text: "Send";
+                            enabled: !root.busy;
+                            width: 64px;
+                            clicked => {
+                                if (root.chat-input != "") {
+                                    root.send-message(root.chat-input);
+                                    root.chat-input = "";
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
