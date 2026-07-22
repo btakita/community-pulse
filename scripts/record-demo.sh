@@ -46,20 +46,17 @@ ffmpeg -hide_banner -loglevel error -y \
   -c:v libx264 -preset veryfast -crf 28 -pix_fmt yuv420p "$video_path" &
 ffmpeg_pid=$!
 
-# Show the real replay tool path, visual interest changes, evidence, and tracking.
-xdotool mousemove --window "$window_id" 1148 804 click 1
+# Show the real replay tool path, shared interest changes, inline evidence, and tracking.
+xdotool mousemove --window "$window_id" 1315 788 click 1
 sleep 3
-xdotool mousemove --window "$window_id" 225 500 click 1
+xdotool mousemove --window "$window_id" 222 512 click 1
 sleep 2
-xdotool mousemove --window "$window_id" 267 218 click 1
-sleep 2
-xdotool mousemove --window "$window_id" 1002 239 click 1
+xdotool mousemove --window "$window_id" 974 211 click 1
 sleep 3
-xdotool mousemove --window "$window_id" 956 239 click 1
-sleep 2
-xdotool mousemove --window "$window_id" 1185 853 click 1
-xdotool type --window "$window_id" --delay 35 "Track WASM runtimes for me"
-xdotool key --window "$window_id" Return
+xdotool windowfocus --sync "$window_id"
+xdotool mousemove --window "$window_id" 1280 836 click 1
+xdotool type --clearmodifiers --delay 35 "Track WASM runtimes for me"
+xdotool key Return
 sleep 4
 
 import -window "$window_id" "$screenshot_path"

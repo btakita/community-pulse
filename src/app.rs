@@ -5,7 +5,6 @@ use crate::reactive::UiSnapshot;
 use crate::tools::ToolBridge;
 use anyhow::Result;
 use slint::{ModelRc, SharedString, VecModel};
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 slint::include_modules!();
@@ -259,14 +258,18 @@ fn apply_snapshot(window: &AppWindow, snapshot: UiSnapshot) {
     }
 }
 
-fn topic_rows(interests: &InterestModel, suggested: &[String]) -> Vec<TopicRow> {
-    let mut topics = suggested.iter().cloned().collect::<BTreeSet<_>>();
-    topics.extend(interests.0.keys().cloned());
-    topics.extend(
-        ["rust", "wasm-runtimes", "local-first", "ai-infra", "crypto"]
-            .into_iter()
-            .map(str::to_owned),
-    );
+fn topic_rows(interests: &InterestModel, _suggested: &[String]) -> Vec<TopicRow> {
+    let mut topics = ["rust", "local-first", "ai-infra", "wasm-runtimes", "crypto"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let extra_topics = interests
+        .0
+        .keys()
+        .filter(|topic| !topics.contains(topic))
+        .cloned()
+        .collect::<Vec<_>>();
+    topics.extend(extra_topics);
     topics
         .into_iter()
         .map(|topic| {
