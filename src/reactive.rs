@@ -34,20 +34,20 @@ impl PulseState {
         suggested_topics: Vec<String>,
     ) -> Self {
         let context = ThreadSafeContext::new();
-        let digest = context.cell(Vec::<DigestCard>::new());
-        let interests = context.cell(interests);
-        let evidence = context.cell(None::<TrendEvidence>);
-        let tracked_topics = context.cell(tracked_topics);
-        let suggested_topics = context.cell(suggested_topics);
-        let chat = context.cell(vec![ChatMessage {
+        let digest = context.source(Vec::<DigestCard>::new());
+        let interests = context.source(interests);
+        let evidence = context.source(None::<TrendEvidence>);
+        let tracked_topics = context.source(tracked_topics);
+        let suggested_topics = context.source(suggested_topics);
+        let chat = context.source(vec![ChatMessage {
             id: 0,
             role: ChatRole::Assistant,
             body: "Ask what is moving, tune an interest, or open the evidence behind a trend."
                 .to_owned(),
             tool: None,
         }]);
-        let loading = context.cell(false);
-        let next_message_id = context.cell(1_u64);
+        let loading = context.source(false);
+        let next_message_id = context.source(1_u64);
         let status = context.computed(move |compute| {
             let cards = compute.get(&digest).len();
             let tracked = compute.get(&tracked_topics).len();

@@ -2910,9 +2910,9 @@ dependencies = [
 
 [[package]]
 name = "lazily"
-version = "0.47.0"
+version = "0.48.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2c7b249d13eb7ac43d69bcd636ee0a3be2c735b31d2e0a81a1d787fd9a5cc2f"
+checksum = "21fc5b5f539cf48f21b213bd214cba80de16c5bafe00f02e80d264a6662a617f"
 dependencies = [
  "arc-swap",
  "lazily-macros",
