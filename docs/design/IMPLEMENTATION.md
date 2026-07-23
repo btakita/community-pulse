@@ -770,6 +770,20 @@ The master fader stays; add direct numeric entry for the budget value:
    0 → 3); non-numeric revert; readout↔fader consistency after a typed
    commit.
 
+## Video-call resource isolation (operator request)
+
+**Status: implemented.** Running one or more Pulse windows must not compete
+with video-call capture/encoding for the GPU/video processor. Pulse ships with
+only Slint's CPU software renderer; the OpenGL/FemtoVG renderer is excluded from
+the dependency graph so each process cannot create a hardware-rendering
+context. X11 and Wayland window support remain enabled.
+
+The desktop status timer must also avoid unconditional redraws after moving
+rendering to the CPU: update the ingest label only when its displayed value
+changes, and advance research progress only while the selected research run is
+active. `make check` and a dependency-tree assertion that FemtoVG is absent are
+the acceptance checks.
+
 ## Explicit non-goals (don't spend time here)
 
 - Dark theme: the app ships light-only for the demo; the mockup's dark

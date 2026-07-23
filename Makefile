@@ -1,6 +1,13 @@
-.PHONY: check fmt clippy test build demo demo-mobile demo-companion demo-shots demo-launcher-smoke
+.PHONY: check renderer-check fmt clippy test build demo demo-mobile demo-companion demo-shots demo-launcher-smoke
 
-check: fmt clippy test demo-launcher-smoke
+check: renderer-check fmt clippy test demo-launcher-smoke
+
+renderer-check:
+	@if cargo tree -e normal -i i-slint-renderer-femtovg >/dev/null 2>&1; then \
+		echo "hardware FemtoVG renderer must remain excluded" >&2; \
+		exit 1; \
+	fi
+	@cargo tree -e normal -i i-slint-renderer-software >/dev/null
 
 fmt:
 	cargo fmt --all -- --check

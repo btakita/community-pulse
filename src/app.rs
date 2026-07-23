@@ -144,12 +144,27 @@ fn start_desktop_ingest_clock(window: &AppWindow, bridge: &ToolBridge) {
     let weak = window.as_weak();
     let bridge = bridge.clone();
     DESKTOP_INGEST_CLOCK.with(|timer| {
-        timer.start(TimerMode::Repeated, Duration::from_millis(500), move || {
+        timer.start(TimerMode::Repeated, Duration::from_secs(1), move || {
             if let Some(window) = weak.upgrade() {
                 let snapshot = bridge.snapshot();
-                window.set_ingest_label(ingest_label(&snapshot).into());
-                apply_research_run_state(&window, &snapshot);
-                window.set_research_progress_phase((window.get_research_progress_phase() + 1) % 5);
+                let label = ingest_label(&snapshot);
+                if window.get_ingest_label().as_str() != label {
+                    window.set_ingest_label(label.into());
+                }
+
+                let topic_id = snapshot
+                    .evidence
+                    .as_ref()
+                    .map(|evidence| evidence.id.as_str());
+                let research_running = ["claude", "codex"]
+                    .into_iter()
+                    .any(|agent| research_run_progress(&snapshot.research_runs, topic_id, agent).1);
+                if research_running {
+                    apply_research_run_state(&window, &snapshot);
+                    window.set_research_progress_phase(
+                        (window.get_research_progress_phase() + 1) % 5,
+                    );
+                }
             }
         });
     });
