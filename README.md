@@ -52,6 +52,59 @@ Try these prompts:
 - `Why is WASM moving?`
 - `Track WASM runtimes for me`
 
+## Live desktop and mobile clients
+
+The demo above is deterministic and offline. To drive the real clients against
+live Hacker News, Lobsters, and Product Hunt data with live Claude Code and
+Codex delegation, build once and launch with the checked-in helper scripts:
+
+```bash
+cargo build
+
+./bin/desktop.sh              # desktop window
+./bin/mobile.sh               # portrait phone frame
+./bin/desktop-and-mobile.sh   # synchronized desktop + phone (companion)
+```
+
+Each script runs `app --mcp-port 7432 --live --ingest-interval 300`, so the
+in-process MCP endpoint is live, public sources refresh every 300 seconds (never
+below the 120-second floor), and no fixture data is loaded.
+`desktop-and-mobile.sh` honors a `PULSE_BINARY` override (for example a
+`target/release/pulse` build) and forwards any extra flags. The equivalent long
+forms are:
+
+```bash
+cargo run -- app --live --ingest-interval 300
+cargo run -- app --mobile --live --ingest-interval 300
+cargo run -- app --companion --live --ingest-interval 300
+```
+
+### Wire in live Claude Code and Codex
+
+The clients delegate to the installed `claude` and `codex` CLIs using each
+harness's own account; Pulse stores no provider API keys on this path. Register
+the running endpoint once and verify prerequisites:
+
+```bash
+cargo run -- setup                             # configure both; or setup claude / setup codex
+cargo run -- research doctor --mcp-port 7432   # check binaries, MCP registration, reachability
+```
+
+Then, in any open desktop or phone window, expand a card and choose **Research
+with Claude** or **Research with Codex**. Claude delegation defaults to
+`--model opus` and pre-authorizes only the local `mcp__pulse__*` tools. Reports
+stream back into card badges, the evidence panel, and the Research drawer; see
+[Desktop research loop](#desktop-research-loop) for the full lifecycle. To keep
+visible, interactive agent shells open alongside the app, add one or both
+terminals:
+
+```bash
+cargo run -- app --live --agent-terminal=claude --agent-terminal=codex
+```
+
+Each `--agent-terminal` opens a Claude or Codex session in `$TERMINAL` that
+mutates the exact `ToolBridge` shown in the desktop and phone windows.
+
 ## CLI-first data story
 
 ```bash
