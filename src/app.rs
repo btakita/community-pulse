@@ -180,6 +180,20 @@ macro_rules! wire_callbacks {
         {
             let bridge = $bridge.clone();
             let targets = $targets.clone();
+            $window.on_set_muted(move |topic, muted| {
+                if let Err(error) = bridge.set_muted(topic.as_str(), muted) {
+                    bridge.state().append_chat(
+                        ChatRole::System,
+                        format!("Mute update failed: {error:#}"),
+                        None,
+                    );
+                }
+                render_now(&targets, &bridge);
+            });
+        }
+        {
+            let bridge = $bridge.clone();
+            let targets = $targets.clone();
             $window.on_set_interest(move |topic, weight| {
                 if let Err(error) = bridge.set_interest(topic.as_str(), weight as f64) {
                     bridge.state().append_chat(
@@ -1690,6 +1704,11 @@ fn apply_mobile_snapshot(window: &MobileWindow, snapshot: UiSnapshot) {
         .collect();
     window.set_digest(model(digest));
     window.set_attention_budget(snapshot.budget as i32);
+    window.set_methodology_formula(
+        methodology_copy(snapshot.budget, &snapshot.source_weights)
+            .formula
+            .into(),
+    );
     let topics = topic_rows(&snapshot.interests);
     let mixer_topics = topics
         .iter()

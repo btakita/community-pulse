@@ -3,7 +3,7 @@ import "fonts/InstrumentSans[wdth,wght].ttf";
 import "fonts/JetBrainsMono[wght].ttf";
 import { DigestRow, TopicRow, ChatRow, EvidencePostRow, EvidenceRow } from "models.slint";
 import { Tokens } from "theme.slint";
-import { ChevronIconButton, CloseIconButton } from "icons.slint";
+import { ChevronIconButton, CloseIconButton, HoverTooltip, InfoIconButton } from "icons.slint";
 
 component MobileMonoLabel inherits Text {
     color: Tokens.ink-3;
@@ -193,6 +193,8 @@ component MobileTopicChannel inherits Rectangle {
         data.id == "wasm-runtimes" ? Tokens.wasm : Tokens.steel;
     in property <float> visual-weight: (data.weight-value + 1.0) / 3.0;
     callback set-weight(float);
+    callback set-muted(bool);
+    callback remove-topic();
 
     height: 66px;
     border-radius: 14px;
@@ -221,7 +223,7 @@ component MobileTopicChannel inherits Rectangle {
         vertical-alignment: center;
     }
     Text {
-        x: parent.width - 82px;
+        x: parent.width - 112px;
         y: 9px;
         width: 36px;
         height: 20px;
@@ -231,6 +233,11 @@ component MobileTopicChannel inherits Rectangle {
         font-size: 10px;
         horizontal-alignment: right;
         vertical-alignment: center;
+    }
+    CloseIconButton {
+        x: parent.width - 70px;
+        y: 8px;
+        clicked => { root.remove-topic(); }
     }
     mute := Rectangle {
         x: parent.width - 39px;
@@ -250,7 +257,7 @@ component MobileTopicChannel inherits Rectangle {
             horizontal-alignment: center;
             vertical-alignment: center;
         }
-        TouchArea { clicked => { root.set-weight(data.muted ? 0.0 : -1.0); } }
+        TouchArea { clicked => { root.set-muted(!data.muted); } }
     }
     fader := Rectangle {
         x: 14px;
@@ -467,6 +474,7 @@ component MobileChatMessage inherits Rectangle {
 component MobileEvidenceSheet inherits Rectangle {
     in property <EvidenceRow> data;
     in property <[EvidencePostRow]> posts;
+    in property <string> methodology-formula;
     in property <bool> side-panel: false;
     in property <length> available-height: 430px;
     callback close();
@@ -578,20 +586,32 @@ component MobileEvidenceSheet inherits Rectangle {
                     y: parent.height - 1px;
                     width: parent.width;
                     height: 1px;
-                    background: post-touch.has-hover ? Tokens.accent : transparent;
+                    background: post-touch.hovered ? Tokens.accent : transparent;
                 }
-                post-touch := TouchArea {
-                    mouse-cursor: pointer;
+                post-touch := HoverTooltip {
+                    text: post.match-tooltip;
+                    clickable: true;
                     clicked => { root.open-url(post.url); }
                 }
             }
         }
-        Text {
-            text: "rank = trend × interest · velocity + z-score + sources";
-            color: Tokens.ink-3;
-            font-family: "JetBrains Mono";
-            font-size: 7.5px;
-            horizontal-alignment: center;
+        HorizontalLayout {
+            height: 24px;
+            spacing: 6px;
+            Text {
+                text: root.methodology-formula;
+                color: Tokens.ink-3;
+                font-family: "JetBrains Mono";
+                font-size: 7.5px;
+                overflow: elide;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            InfoIconButton {
+                tooltip: root.methodology-formula;
+                clickable: false;
+                align-right: true;
+            }
         }
     }
 }
@@ -600,6 +620,7 @@ component MobileHeader inherits Rectangle {
     in property <bool> compact: false;
     in property <int> count: 0;
     in property <int> budget: 5;
+    in property <string> methodology-formula;
     height: root.compact ? 52px : 76px;
     background: Tokens.ground;
     Text {
@@ -646,6 +667,15 @@ component MobileHeader inherits Rectangle {
         x: 16px;
         y: 61px;
         text: "TODAY'S PULSE  ·  " + root.count + " / " + root.budget;
+    }
+    InfoIconButton {
+        visible: !root.compact;
+        x: 181px;
+        y: 51px;
+        width: 22px;
+        height: 22px;
+        tooltip: root.methodology-formula;
+        clickable: false;
     }
 }
 
@@ -752,12 +782,14 @@ export component MobileWindow inherits Window {
     in-out property <bool> has-evidence: false;
     in-out property <bool> busy: false;
     in-out property <string> status: "";
+    in-out property <string> methodology-formula: "";
     in-out property <bool> landscape: false;
     private property <int> active-tab: 0;
     private property <string> chat-input: "";
 
     callback refresh-requested();
     callback set-interest(string, float);
+    callback set-muted(string, bool);
     callback set-budget(int);
     callback explain-requested(string);
     callback clear-evidence();
@@ -806,10 +838,11 @@ export component MobileWindow inherits Window {
         VerticalLayout {
             spacing: 0px;
             PhoneStatusBar { time: root.sysbar-time; }
-            MobileHeader {
-                compact: root.landscape;
-                count: root.digest.length;
-                budget: root.attention-budget;
+                MobileHeader {
+                    compact: root.landscape;
+                    count: root.digest.length;
+                    budget: root.attention-budget;
+                    methodology-formula: root.methodology-formula;
             }
 
         body := Rectangle {
@@ -898,10 +931,12 @@ export component MobileWindow inherits Window {
                         width: mix-scroll.width;
                         spacing: 9px;
                         for topic in root.topics: MobileTopicChannel {
-                            width: mix-list.width;
-                            data: topic;
-                            set-weight(weight) => { root.set-interest(topic.id, weight); }
-                        }
+                        width: mix-list.width;
+                        data: topic;
+                        set-weight(weight) => { root.set-interest(topic.id, weight); }
+                        set-muted(muted) => { root.set-muted(topic.id, muted); }
+                        remove-topic => { root.set-interest(topic.id, 0.0); }
+                    }
                         MobileMonoLabel { text: "SUGGESTED"; }
                         HorizontalLayout {
                             height: 32px;
@@ -1108,6 +1143,7 @@ export component MobileWindow inherits Window {
             available-height: parent.height;
             data: root.evidence;
             posts: root.evidence-posts;
+            methodology-formula: root.methodology-formula;
             close => { root.clear-evidence(); }
             open-url(url) => { root.open-url(url); }
             animate x { duration: 180ms; easing: ease-in-out; }
