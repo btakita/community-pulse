@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod chat;
+pub mod command_plane;
 pub mod domain;
 pub mod engine;
 pub mod ingest;
